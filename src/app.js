@@ -1,9 +1,9 @@
 import express from "express";
 import cors from "cors";
 
-import healthRoute from "./routes/health.js";
-import parseRoute from "./routes/parse.js";
-import exportRoute from "./routes/export.js";
+import { router as exportRoute } from "./routes/health.js";
+import { router as exportRoute } from "./routes/parse.js";
+import { router as exportRoute } from "./routes/export.js";
 
 const app = express();
 
