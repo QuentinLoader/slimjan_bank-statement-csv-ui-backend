@@ -4,45 +4,28 @@ import { parseStatement } from '../services/parseStatement.js';
 
 export const router = express.Router();
 
-// Memory storage is best for serverless/container environments like Railway
-const upload = multer({ 
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
-});
+// This handles the file in memory
+const upload = multer({ storage: multer.memoryStorage() });
 
 /**
- * Endpoint: POST /parse
- * Note: router.post('/') is correct because the prefix /parse is set in app.js
+ * This is the missing piece! 
+ * Because app.js already uses "/parse", this "/" actually means "/parse"
  */
 router.post('/', upload.single('file'), async (req, res) => {
   try {
-    // 1. Log arrival for debugging
-    console.log(`--- New Parse Request ---`);
-    
     if (!req.file) {
-      console.error('Error: No file found in request body');
-      return res.status(400).json({ error: 'No file uploaded. Ensure field name is "file".' });
+      return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    console.log(`File Received: ${req.file.originalname} (${req.file.size} bytes)`);
+    console.log("File received in route, passing to service...");
 
-    // 2. Call the parser service
+    // Call the service we just updated
     const transactions = await parseStatement(req.file.buffer);
     
-    // 3. Log success
-    console.log(`Successfully parsed ${transactions.length} transactions.`);
-    
-    // Send back the transactions
+    // Return the data to the frontend
     res.status(200).json(transactions);
-
   } catch (error) {
-    // 4. Detailed error logging for Railway console
-    console.error('Parse Route Error:', error.message);
-    
-    res.status(error.statusCode || 500).json({
-      error: error.name || 'PARSE_FAILED',
-      message: error.message || 'Internal Server Error',
-      code: error.code || 'UNKNOWN_ERROR'
-    });
+    console.error('Route Error:', error.message);
+    res.status(500).json({ error: error.message });
   }
 });
