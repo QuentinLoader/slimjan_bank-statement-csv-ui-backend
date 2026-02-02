@@ -1,4 +1,4 @@
-import { ParseError } from "../errors/ParseError.js";
+import { ParseError } from "../../errors/ParseError.js";
 
 export function extractFnbMetadata(text) {
   // Name
