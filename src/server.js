@@ -1,33 +1,33 @@
 import express from "express";
-import cors from "cors"; // <--- Added for Fire 1
+import cors from "cors";
 import multer from "multer";
 import { parseStatement } from "./services/parseStatement.js";
 
 const app = express();
 
-// 1. Fix CORS: Allow your Vercel frontend to talk to this Railway backend
+// 1. CORS Setup - Vital for Vercel communication
 app.use(cors()); 
-
 app.use(express.json());
 
-// Set up Multer for memory storage (file uploads)
 const upload = multer({ storage: multer.memoryStorage() });
 
-/**
- * The /parse route your frontend is looking for.
- * Image 1 showed a 404, so we must ensure this path is exactly '/parse'
- */
+// Health check for Railway to see the app is "Alive"
+app.get("/", (req, res) => {
+  res.send("SlimJan Backend is Online");
+});
+
+app.get("/health", (req, res) => {
+  res.json({ status: "UP", timestamp: new Date().toISOString() });
+});
+
+// Main parsing route
 app.post("/parse", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: "No file uploaded" });
     }
-
     console.log(`Received file: ${req.file.originalname}`);
-    
-    // Call the service that chooses between Capitec and FNB parsers
     const transactions = await parseStatement(req.file.buffer);
-    
     res.json(transactions);
   } catch (error) {
     console.error("Parsing Error:", error.message);
@@ -38,9 +38,12 @@ app.post("/parse", upload.single("file"), async (req, res) => {
   }
 });
 
-// Root route for health check
-app.get("/", (req, res) => {
-  res.send("SlimJan Backend is Online");
+// --- POINT 2: RAILWAY STARTUP LOGIC ---
+// We define the port and tell the app to listen on all network interfaces
+const PORT = process.env.PORT || 8080;
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 SlimJan engine started on port ${PORT}`);
 });
 
 export default app;
