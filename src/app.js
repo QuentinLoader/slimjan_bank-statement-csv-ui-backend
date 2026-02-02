@@ -11,14 +11,11 @@ const app = express();
 /**
  * MIDDLEWARE
  */
-// Allows the app to read JSON bodies sent from your frontend
 app.use(express.json());
 
-// CORS configuration
-// origin: true reflects the request origin, but for production, 
-// you can replace it with your specific Vercel/Netlify URL.
+// FIXED: Changed origin to "*" to prevent Vercel blocking
 app.use(cors({ 
-  origin: true,
+  origin: "*", 
   methods: ["GET", "POST"],
   credentials: true 
 }));
@@ -33,7 +30,6 @@ app.use("/export", exportRoute);
 /**
  * ERROR HANDLING
  */
-// 404 fallback for missing endpoints
 app.use((req, res) => {
   res.status(404).json({
     error: "NOT_FOUND",
@@ -41,7 +37,6 @@ app.use((req, res) => {
   });
 });
 
-// Global Error Handler (prevents server crashes on unhandled logic errors)
 app.use((err, req, res, next) => {
   console.error("Global Error:", err.stack);
   res.status(500).json({
