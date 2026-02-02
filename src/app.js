@@ -4,14 +4,14 @@ import cors from "cors";
 import healthRoute from "./routes/health.js";
 import parseRoute from "./routes/parse.js";
 import exportRoute from "./routes/export.js";
+import { parseRateLimiter } from "./middleware/rateLimit.js";
 
 const app = express();
 
 /**
  * Global middleware
  * -----------------
- * - CORS: allow frontend (Vercel) + local dev
- * - JSON parsing only where needed (export)
+ * CORS only (do NOT add express.json globally – file uploads rely on multer)
  */
 app.use(
   cors({
@@ -22,18 +22,20 @@ app.use(
 );
 
 /**
- * Routes
- * ------
- * Keep these explicit and boring.
+ * Health check (no rate limiting)
  */
 app.use("/health", healthRoute);
-app.use("/parse", parseRoute);
-app.use("/export", exportRoute);
+
+/**
+ * Core API routes (rate limited)
+ * ------------------------------
+ * Applies to /parse and /export only
+ */
+app.use("/parse", parseRateLimiter, parseRoute);
+app.use("/export", parseRateLimiter, exportRoute);
 
 /**
  * Unknown route hard stop
- * -----------------------
- * Prevents accidental exposure of internals
  */
 app.use((req, res) => {
   res.status(404).json({
@@ -43,7 +45,7 @@ app.use((req, res) => {
 });
 
 /**
- * Global error handler (fail loudly, consistently)
+ * Global error handler (last resort)
  */
 app.use((err, req, res, next) => {
   console.error("Unhandled error:", err);
