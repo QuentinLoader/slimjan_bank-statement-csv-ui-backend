@@ -8,9 +8,9 @@
   },
   "dependencies": {
     "express": "^4.22.1",
+    "express-rate-limit": "^8.2.1",
     "fast-csv": "^5.0.5",
     "multer": "^2.0.2",
-    "pdf-parse": "^2.4.5",
-    "xlsx": "^0.18.5"
+    "pdf-parse": "^2.4.5"
   }
 }
