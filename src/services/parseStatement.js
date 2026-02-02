@@ -3,8 +3,8 @@ import { detectBank } from "../core/detectBank.js";
 import { extractTransactionSection } from "../core/extractTransactionSection.js";
 import { extractCapitecMetadata } from "../parsers/capitec.metadata.js";
 import { extractFnbMetadata } from "../parsers/fnb.metadata.js";
-import { parseCapitecTransactions } from "../parsers/capitec/capitec_transactions.js";
-import { parseFnbTransactions } from "../parsers/fnb/fnb_transactions.js";
+import { parseCapitecTransactions } from "../parsers/capitec_transactions.js";
+import { parseFnbTransactions } from "../parsers/fnb_transactions.js";
 import { validateLedger } from "../core/validateLedger.js"; // This path is now correct!
 
 export async function parseStatement(buffer) {
