@@ -1,4 +1,6 @@
 import { ParseError } from "../errors/ParseError.js";
+// Added this missing import based on your error logs
+import * as csvUtils from "../utils/csv.js"; 
 
 /**
  * Deterministically validates ledger balance continuity.
@@ -21,6 +23,7 @@ export function validateLedger(transactions) {
       (curr.debit || 0) -
       (curr.fee || 0);
 
+    // Using epsilon check for floating point math
     if (Math.abs(expected - curr.balance) > 0.01) {
       warnings.push(
         `Balance mismatch on ${curr.date}: expected ${expected.toFixed(
