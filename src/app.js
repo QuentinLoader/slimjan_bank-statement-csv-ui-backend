@@ -1,25 +1,52 @@
 import express from "express";
 import cors from "cors";
 
+// Routes
 import { router as healthRoute } from "./routes/health.js";
 import { router as parseRoute } from "./routes/parse.js";
 import { router as exportRoute } from "./routes/export.js";
 
 const app = express();
 
-// CORS (needed for frontend + Insomnia)
-app.use(cors({ origin: true }));
+/**
+ * MIDDLEWARE
+ */
+// Allows the app to read JSON bodies sent from your frontend
+app.use(express.json());
 
-// ROUTES — THIS IS WHAT MATTERS
+// CORS configuration
+// origin: true reflects the request origin, but for production, 
+// you can replace it with your specific Vercel/Netlify URL.
+app.use(cors({ 
+  origin: true,
+  methods: ["GET", "POST"],
+  credentials: true 
+}));
+
+/**
+ * ROUTES
+ */
 app.use("/health", healthRoute);
 app.use("/parse", parseRoute);
 app.use("/export", exportRoute);
 
-// 404 fallback
+/**
+ * ERROR HANDLING
+ */
+// 404 fallback for missing endpoints
 app.use((req, res) => {
   res.status(404).json({
     error: "NOT_FOUND",
-    message: "Endpoint does not exist"
+    message: `The endpoint ${req.originalUrl} does not exist on this server.`
+  });
+});
+
+// Global Error Handler (prevents server crashes on unhandled logic errors)
+app.use((err, req, res, next) => {
+  console.error("Global Error:", err.stack);
+  res.status(500).json({
+    error: "INTERNAL_SERVER_ERROR",
+    message: "Something went wrong on our end."
   });
 });
 
