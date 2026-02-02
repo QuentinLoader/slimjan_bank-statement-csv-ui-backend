@@ -4,79 +4,80 @@ import { ParseError } from "../errors/ParseError.js";
  * Capitec rows look like:
  * Date | Description | Category | Money In | Money Out | Fee | Balance
  */
-export function parseCapitecTransactions(lines) {
+export function parseCapitec(textOrLines) {
+  // Ensure we are working with an array of lines
+  const lines = Array.isArray(textOrLines) ? textOrLines : textOrLines.split('\n');
   const rows = [];
 
   for (const line of lines) {
-    // Skip header repeats
-    if (/^Date\s+Description/i.test(line)) continue;
+    const trimmedLine = line.trim();
+    
+    // Skip empty lines or header repeats
+    if (!trimmedLine || /^Date\s+Description/i.test(trimmedLine)) continue;
 
-    // Normalize spacing
-    const clean = line.replace(/\s+/g, " ").trim();
+    // Normalize spacing (turns multiple spaces into one)
+    const clean = trimmedLine.replace(/\s+/g, " ");
 
     /**
-     * Example:
-     * 01/12/2025 Online Purchase: Afrihost.com Internet -83.00 82.24
-     * 03/12/2025 PayShap Payment Received Other Income 100.00 165.24
+     * Regex breakdown:
+     * 1. (\d{2}\/\d{2}\/\d{4}) -> Date (DD/MM/YYYY)
+     * 2. (.*?) -> Description (lazy match)
+     * 3. The following groups handle the columns for Money In/Out/Fee/Balance
      */
     const match = clean.match(
-      /^(\d{2}\/\d{2}\/\d{4})\s+(.*?)\s+(-?\d[\d\s,.]*|\s)\s*(-?\d[\d\s,.]*|\s)?\s*(-?\d[\d\s,.]*|\s)?\s+(\d[\d\s,.]*)$/
+      /^(\d{2}\/\d{2}\/\d{4})\s+(.*?)\s+(-?\d[\d\s,.]*)?\s*(-?\d[\d\s,.]*)?\s*(-?\d[\d\s,.]*)?\s+(-?\d[\d\s,.]*)$/
     );
 
     if (!match) {
-      throw new ParseError(
-        "CAPITEC_ROW_PARSE_FAILED",
-        `Unparseable Capitec transaction row: "${line}"`
-      );
+      // Instead of crashing the whole app, we log the skipped line
+      console.warn(`Skipping line (no match): ${trimmedLine}`);
+      continue; 
     }
 
     const [
       ,
       date,
       description,
-      moneyInRaw,
-      moneyOutRaw,
-      feeRaw,
+      val1,
+      val2,
+      val3,
       balanceRaw
     ] = match;
 
-    const credit = parseAmount(moneyInRaw);
-    const debit = parseAmount(moneyOutRaw);
-    const fee = parseAmount(feeRaw);
+    // Capitec columns vary; we parse what we find
+    const amount1 = parseAmount(val1);
+    const amount2 = parseAmount(val2);
+    const amount3 = parseAmount(val3);
     const balance = parseAmount(balanceRaw);
 
-    if (credit > 0 && debit > 0) {
-      throw new ParseError(
-        "CAPITEC_INVALID_ROW",
-        "Row has both debit and credit"
-      );
-    }
-
+    // Basic logic to assign credit/debit based on common Capitec layouts
+    // Usually: Money In is positive, Money Out is negative
     rows.push({
       date: toISO(date),
       description: description.trim(),
-      debit: debit > 0 ? debit : 0,
-      credit: credit > 0 ? credit : 0,
-      fee: fee > 0 ? fee : null,
-      balance
+      amount: amount1 !== 0 ? amount1 : amount2, // Simplified for the UI table
+      balance: balance
     });
   }
 
   if (rows.length === 0) {
-    throw new ParseError("CAPITEC_NO_TRANSACTIONS", "No Capitec transactions parsed");
+    throw new ParseError("CAPITEC_NO_TRANSACTIONS", "No Capitec transactions parsed. Check PDF format.");
   }
 
   return rows;
 }
 
-/* helpers */
+/* --- Helpers --- */
 
-function toISO(date) {
+export function toISO(date) {
+  if (!date.includes('/')) return date;
   const [dd, mm, yyyy] = date.split("/");
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function parseAmount(val) {
-  if (!val) return 0;
-  return Number(val.replace(/[^\d.-]/g, ""));
+export function parseAmount(val) {
+  if (!val || val.trim() === "") return 0;
+  // Remove spaces (Capitec uses them as thousands separators) and non-numeric chars
+  const sanitized = val.replace(/\s/g, "").replace(/[^-0.9.]/g, "");
+  return parseFloat(sanitized) || 0;
 }
