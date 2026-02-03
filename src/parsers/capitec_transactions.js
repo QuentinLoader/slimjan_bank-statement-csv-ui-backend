@@ -1,46 +1,51 @@
 export const parseCapitec = (text) => {
   const transactions = [];
-  const lines = text.split('\n');
+  
+  // 1. SPLIT BY DATE: This creates a "chunk" for every transaction
+  // The Regex looks for DD/MM/YYYY and keeps the date in the result
+  const chunks = text.split(/(?=\d{2}\/\d{2}\/\d{4})/);
 
-  // Matches DD/MM/YYYY
-  const dateRegex = /^(\d{2}\/\d{2}\/\d{4})/;
-  // Matches currency amounts (e.g., -150.00, 2,500.00, 45.10)
+  // 2. REGEX FOR AMOUNTS: Matches numbers like -150.00, 2,500.00, 45.10
   const amountRegex = /-?\d+[\d\s,]*\.\d{2}/;
 
-  lines.forEach(line => {
-    const trimmed = line.trim();
-    const dateMatch = trimmed.match(dateRegex);
+  chunks.forEach(chunk => {
+    const trimmedChunk = chunk.trim();
+    if (!trimmedChunk) return;
 
+    // Check if this chunk starts with a valid date
+    const dateMatch = trimmedChunk.match(/^(\d{2}\/\d{2}\/\d{4})/);
+    
     if (dateMatch) {
       const date = dateMatch[0];
-      // Get the text following the date
-      let content = trimmed.slice(date.length).trim();
+      // Get everything in the chunk AFTER the date
+      let content = trimmedChunk.slice(date.length).trim();
 
-      // Find all numbers that look like valid currency amounts
+      // Find all numbers that look like valid currency amounts in the WHOLE chunk
       const amountMatches = content.match(amountRegex);
 
       if (amountMatches && amountMatches.length > 0) {
-        // In Capitec extraction, the transaction amount is typically 
-        // the first valid currency string found after the date.
+        // Typically, the first amount after the date is the transaction value
         const rawAmount = amountMatches[0];
         const cleanAmount = parseFloat(rawAmount.replace(/\s|,/g, ''));
 
-        // Description is everything between the date and the amount
-        let description = content.split(rawAmount)[0].trim();
+        // DESCRIPTION RECOVERY:
+        // Take everything before the first amount. 
+        // We replace newlines with spaces to fix the "overflow" issue.
+        let description = content.split(rawAmount)[0]
+          .replace(/\n/g, ' ')  // Convert overflows into a single line
+          .replace(/\s{2,}/g, ' ') // Clean up extra spaces
+          .trim();
         
-        // Remove common column headers if they got merged into the description
-        const noiseKeywords = ["Transfer", "Fees", "Other Income", "Internet", "Groceries", "Digital"];
-        noiseKeywords.forEach(keyword => {
-          if (description.endsWith(keyword)) {
-            description = description.slice(0, -keyword.length).trim();
-          }
+        // Remove noise/column headers if they got stuck
+        const noise = ["Transfer", "Fees", "Other Income", "Internet", "Groceries"];
+        noise.forEach(n => {
+          if (description.endsWith(n)) description = description.slice(0, -n.length).trim();
         });
 
-        // Filter out balance-only or empty lines
         if (description && !description.toLowerCase().includes('balance')) {
           transactions.push({
             date,
-            description: description || "Bank Transaction",
+            description,
             amount: cleanAmount,
             approved: true
           });
@@ -49,6 +54,5 @@ export const parseCapitec = (text) => {
     }
   });
 
-  console.log(`✅ YouScan Engine found ${transactions.length} Capitec transactions.`);
   return transactions;
 };
