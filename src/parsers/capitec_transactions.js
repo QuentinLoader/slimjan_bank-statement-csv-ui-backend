@@ -2,10 +2,11 @@ export const parseCapitec = (text) => {
   const transactions = [];
   const lines = text.split(/\r?\n/);
 
-  // 1. EXTRACT METADATA (Account & Client))
-  const headerArea = text.slice(0, 3000);
+  // 1. IMPROVED METADATA EXTRACTION (Top of Document)
+  const headerArea = text.slice(0, 5000);
   const accountNumberMatch = headerArea.match(/Account No[:\s]+(\d{10,})/i);
-  const clientNameMatch = headerArea.match(/Unique Document No[\s\S]*?\n([A-Z\s]{5,})\n/);
+  // Capitec Client Name is usually between the Document No and the Address
+  const clientNameMatch = headerArea.match(/Unique Document No[\s\S]*?\n\s*([A-Z\s,]{5,})\n/);
   
   const accountNumber = accountNumberMatch ? accountNumberMatch[1] : "Not Found";
   const clientName = clientNameMatch ? clientNameMatch[1].trim() : "Not Found";
@@ -13,8 +14,8 @@ export const parseCapitec = (text) => {
   const dateRegex = /(\d{2}\/\d{2}\/\d{4})/;
   const amountRegex = /-?\d+[\d\s,]*\.\d{2}/g;
 
-  // Header/Footer phrases to skip
-  const blacklist = ["Page of", "Balance", "Date Description", "Spending Summary", "Unique Document No"];
+  // Header/Footer phrases to ignore while scanning
+  const blacklist = ["Page of", "Balance", "Date Description", "Unique Document No", "24hr Client Care"];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -26,11 +27,19 @@ export const parseCapitec = (text) => {
       const date = dateMatch[0];
       let content = line.split(date)[1].trim();
       
-      // LOOK AHEAD: Check if the NEXT line is a continuation (no date, no amount)
-      let nextLine = lines[i + 1] ? lines[i + 1].trim() : "";
-      if (nextLine && !nextLine.match(dateRegex) && !nextLine.match(amountRegex)) {
-        content = content + " " + nextLine;
-        i++; // Skip the next line in the main loop since we consumed it
+      // MULTI-LINE RECOVERY: Scan up to 2 lines ahead for descriptions like "Milnerton Za"
+      let lookAheadIndex = i + 1;
+      while (lines[lookAheadIndex] && 
+             !lines[lookAheadIndex].match(dateRegex) && 
+             !lines[lookAheadIndex].match(amountRegex) &&
+             lines[lookAheadIndex].trim().length > 1) {
+        
+        const nextLine = lines[lookAheadIndex].trim();
+        if (!blacklist.some(phrase => nextLine.includes(phrase))) {
+          content += " " + nextLine;
+          i = lookAheadIndex; // Move main loop counter forward
+        }
+        lookAheadIndex++;
       }
 
       const amounts = content.match(amountRegex);
@@ -38,9 +47,9 @@ export const parseCapitec = (text) => {
         const amount = parseFloat(amounts[0].replace(/\s|,/g, ''));
         const balance = parseFloat(amounts[amounts.length - 1].replace(/\s|,/g, ''));
         
-        // Clean description by removing the amount and category junk
         let description = content.split(amounts[0])[0].trim();
-        description = description.replace(/(Groceries|Transfer|Fees|Digital|Internet|Holiday|Vehicle|Restaurants|Alcohol)$/, "").trim();
+        // Clean up merged column headers
+        description = description.replace(/(Groceries|Transfer|Fees|Digital|Internet|Holiday|Vehicle|Restaurants|Alcohol|Other Income)$/, "").trim();
 
         transactions.push({
           date,
@@ -55,5 +64,6 @@ export const parseCapitec = (text) => {
     }
   }
 
+  // Ensure sorting by date to help the Balance calculation in UI
   return transactions.filter(t => t.date.includes("/2025") || t.date.includes("/2026"));
 };
