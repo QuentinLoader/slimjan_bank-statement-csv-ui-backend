@@ -1,23 +1,21 @@
 export const parseCapitec = (text) => {
   const transactions = [];
   
-  // 1. EXTRACT METADATA (Account # and Client Name)
-  const accountNumberMatch = text.match(/Account No[:\s]+(\d{10,})/i);
-  const clientNameMatch = text.match(/Unique Document No[\s\S]*?\n([A-Z\s]{5,})\n/);
+  // 1. IMPROVED METADATA EXTRACTION
+  // Look for Account Number and Client Name in the first 2000 characters
+  const headerArea = text.slice(0, 2000);
+  const accountNumberMatch = headerArea.match(/Account No[:\s]+(\d{10,})/i);
+  const accountNumber = accountNumberMatch ? accountNumberMatch[1] : "Not Found";
   
-  const accountNumber = accountNumberMatch ? accountNumberMatch[1] : "Unknown";
-  const clientName = clientNameMatch ? clientNameMatch[1].trim() : "Client Name Not Found";
-
-  // 2. DEFINE BOUNDARIES - Stop before the summary tables
+  // 2. DEFINE BOUNDARIES
   const startMarker = "Transaction History";
-  const stopMarkers = ["Spending Summary", "Card Subscriptions", "Notes"];
+  const stopMarkers = ["Spending Summary", "Card Subscriptions", "Notes", "Unique Document No"];
   
   let validSection = text;
   if (text.includes(startMarker)) {
     validSection = text.split(startMarker)[1];
   }
   
-  // Cut off everything after the first stop marker found
   for (const marker of stopMarkers) {
     if (validSection.includes(marker)) {
       validSection = validSection.split(marker)[0];
@@ -26,22 +24,24 @@ export const parseCapitec = (text) => {
   }
 
   const lines = validSection.split(/\r?\n/);
-  const dateRegex = /^(\d{2}\/\d{2}\/\d{4})/; 
+  const dateRegex = /(\d{2}\/\d{2}\/\d{4})/; // Removed the ^ to find dates anywhere
   const amountRegex = /-?\d+[\d\s,]*\.\d{2}/g;
 
   let pendingTx = null;
 
   for (let line of lines) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.includes("Page of") || trimmed.includes("Balance")) continue;
+    if (!trimmed || trimmed.includes("Page of")) continue;
 
     const dateMatch = trimmed.match(dateRegex);
 
     if (dateMatch) {
+      // Save the previous one before starting a new one
       if (pendingTx && pendingTx.amount !== null) transactions.push(pendingTx);
 
       const date = dateMatch[0];
-      let content = trimmed.slice(date.length).trim();
+      // Keep everything after the date
+      let content = trimmed.split(date)[1].trim();
       const amounts = content.match(amountRegex);
       
       let amount = null;
@@ -50,7 +50,6 @@ export const parseCapitec = (text) => {
 
       if (amounts && amounts.length > 0) {
         amount = parseFloat(amounts[0].replace(/\s|,/g, ''));
-        // Balance is always the last currency match
         balance = parseFloat(amounts[amounts.length - 1].replace(/\s|,/g, ''));
         description = content.split(amounts[0])[0].trim();
       }
@@ -60,27 +59,30 @@ export const parseCapitec = (text) => {
         description, 
         amount, 
         balance, 
-        accountNumber, 
-        clientName, 
+        accountNumber, // Attached here for CSV
         approved: true 
       };
 
     } else if (pendingTx) {
-      // Handle multiline description overflow
-      const amounts = trimmed.match(amountRegex);
-      if (!amounts) {
+      // FIX: Append overflow text if NO NEW DATE is found
+      const amountsInLine = trimmed.match(amountRegex);
+      if (!amountsInLine) {
+        // If it's just text, it's definitely an overflow
         const cleanText = trimmed.split(/\s{2,}/)[0];
         if (cleanText.length > 1) pendingTx.description += ` ${cleanText}`;
+      } else if (pendingTx.amount === null) {
+        // If we started a TX but the amount was on the second line
+        pendingTx.amount = parseFloat(amountsInLine[0].replace(/\s|,/g, ''));
+        pendingTx.balance = parseFloat(amountsInLine[amountsInLine.length - 1].replace(/\s|,/g, ''));
+        pendingTx.description += ` ${trimmed.split(amountsInLine[0])[0].trim()}`;
       }
     }
   }
 
   if (pendingTx && pendingTx.amount !== null) transactions.push(pendingTx);
 
-  // Final Filter: Strictly 2025/2026 and exclude balance rows
   return transactions.filter(t => 
     (t.date.includes("/2025") || t.date.includes("/2026")) &&
-    t.description.length > 2 &&
     !t.description.toLowerCase().includes('balance')
   );
 };
