@@ -1,42 +1,53 @@
 export const parseCapitec = (text) => {
   const transactions = [];
-  // Split the text into individual lines for cleaner processing
+  
+  // 1. Split by lines AND handle potential weird spacing
   const lines = text.split('\n');
 
-  // Regex to match South African dates (DD/MM/YYYY or DD/MM/202X)
-  const dateRegex = /^(\d{2}\/\d{2}\/20\d{2})/;
+  // 2. Updated Regex: Matches South African Date Formats (DD/MM/YYYY or DD MMM YYYY)
+  // Capitec often uses 06/01/2026 or 06 Jan 2026
+  const dateRegex = /(\d{2}[\/\s][A-Za-z0-9]{2,3}[\/\s]\d{4})/;
+
+  // 3. Amount Regex: Matches numbers like 450.00, -1,000.00, or 334.10
+  const amountRegex = /-?\d+[\d\s,]*\.\d{2}/;
 
   lines.forEach(line => {
-    const trimmedLine = line.trim();
+    const trimmed = line.trim();
     
-    // Check if the line starts with a date
-    if (dateRegex.test(trimmedLine)) {
-      // Split the line by multiple spaces to separate columns
-      const parts = trimmedLine.split(/\s{2,}/); 
+    // Check if the line contains a date
+    const dateMatch = trimmed.match(dateRegex);
+    
+    if (dateMatch) {
+      const date = dateMatch[0];
       
-      if (parts.length >= 3) {
-        const date = parts[0];
-        const description = parts[1];
-        
-        // Capitec often puts Money Out in one column and Money In in another
-        // We need to find the value that looks like a currency amount
-        const amountStr = parts.find(p => /^-?\d+\.\d{2}$/.test(p.replace(',', '')));
-        
-        if (amountStr) {
-          // Convert "1,250.00" or "-450.00" to a clean number
-          const amount = parseFloat(amountStr.replace(',', ''));
-          
+      // Remove the date from the line to find the description and amount
+      let remainingText = trimmed.replace(date, '').trim();
+      
+      // Find all numbers that look like amounts in this line
+      const amountMatches = remainingText.match(new RegExp(amountRegex, 'g'));
+      
+      if (amountMatches && amountMatches.length > 0) {
+        // In Capitec, the transaction amount is usually the first or second amount found
+        // depending on if there's a 'Balance' column. 
+        // We'll take the one that isn't the final 'Balance'.
+        const amountStr = amountMatches[0].replace(/\s|,/g, '');
+        const amount = parseFloat(amountStr);
+
+        // The description is whatever is left between the date and the amounts
+        const description = remainingText.split(amountMatches[0])[0].trim() || "Transaction";
+
+        // Filter out "Balance" lines or "Total" lines
+        if (!description.toLowerCase().includes('balance') && !description.toLowerCase().includes('opening')) {
           transactions.push({
             date,
             description,
             amount,
-            approved: true // Default to selected for YouScan
+            approved: true
           });
         }
       }
     }
   });
 
-  console.log(`🔍 Capitec Parser found ${transactions.length} rows.`);
   return transactions;
 };
