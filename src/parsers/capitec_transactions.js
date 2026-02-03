@@ -1,27 +1,34 @@
 export const parseCapitec = (text) => {
   const transactions = [];
   
-  // 1. BOUNDARY LOGIC: Only look at text between these headers
+  // 1. Remove ONLY the global header (Page 1) but don't set a hard end boundary
   const startMarker = "Transaction History";
-  const endMarker = "Unique Document No";
-  
-  let targetText = text;
+  let workingText = text;
   if (text.includes(startMarker)) {
-    targetText = text.split(startMarker)[1]; // Toss out everything before history
-  }
-  if (targetText.includes(endMarker)) {
-    targetText = targetText.split(endMarker)[0]; // Toss out everything after history
+    workingText = text.split(startMarker)[1];
   }
 
-  const lines = targetText.split(/\r?\n/);
-  const dateRegex = /^(\d{2}\/\d{2}\/\d{4})/; // Strict: Date MUST start the line
+  const lines = workingText.split(/\r?\n/);
+  const dateRegex = /^(\d{2}\/\d{2}\/\d{4})/; 
   const amountRegex = /(-?\d+[\d\s,]*\.\d{2})/;
+
+  // Phrases that appear in headers/footers that we want to skip
+  const blacklist = [
+    "Unique Document No",
+    "Capitec Bank is an authorised",
+    "ClientCare@capitecbank",
+    "Date Description Category",
+    "Page of",
+    "24hr Client Care Centre"
+  ];
 
   let pendingTx = null;
 
   for (let line of lines) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed === "Date Description Category Money In Money Out Fee* Balance") continue;
+    
+    // SKIP empty lines or any line containing blacklisted "Junk" text
+    if (!trimmed || blacklist.some(phrase => trimmed.includes(phrase))) continue;
 
     const dateMatch = trimmed.match(dateRegex);
 
@@ -43,13 +50,13 @@ export const parseCapitec = (text) => {
       pendingTx = { date, description, amount, approved: true };
 
     } else if (pendingTx) {
-      // Continuation line for multiline descriptions
+      // Logic to append overflow descriptions from the next line
       const amountMatch = trimmed.match(amountRegex);
       if (amountMatch && pendingTx.amount === null) {
         pendingTx.amount = parseFloat(amountMatch[0].replace(/\s|,/g, ''));
         pendingTx.description += ` ${trimmed.split(amountMatch[0])[0].trim()}`;
       } else if (!amountMatch) {
-        // Clean noise from merged columns
+        // Just extra description text, clean of merged columns
         const cleanPart = trimmed.split(/\s{2,}/)[0];
         if (cleanPart.length > 1) pendingTx.description += ` ${cleanPart}`;
       }
@@ -58,8 +65,9 @@ export const parseCapitec = (text) => {
 
   if (pendingTx && pendingTx.amount !== null) transactions.push(pendingTx);
 
-  // Final validation: Ensure we only keep real transactions
+  // Final Filter: Only keep rows with valid transaction years
   return transactions.filter(t => 
-    t.date.startsWith("2025") || t.date.includes("/2026") || t.date.includes("/2025")
-  ).filter(t => !t.description.toLowerCase().includes('balance'));
+    (t.date.includes("/2025") || t.date.includes("/2026")) &&
+    !t.description.toLowerCase().includes('balance')
+  );
 };
