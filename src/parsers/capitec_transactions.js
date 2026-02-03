@@ -1,57 +1,42 @@
-export function parseCapitec(text) {
-    const transactions = [];
-    // Split into lines and remove empty ones
-    const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+export const parseCapitec = (text) => {
+  const transactions = [];
+  // Split the text into individual lines for cleaner processing
+  const lines = text.split('\n');
+
+  // Regex to match South African dates (DD/MM/YYYY or DD/MM/202X)
+  const dateRegex = /^(\d{2}\/\d{2}\/20\d{2})/;
+
+  lines.forEach(line => {
+    const trimmedLine = line.trim();
     
-    // Pattern for Date: DD/MM/YYYY
-    const dateRegex = /^(\d{2}\/\d{2}\/\d{4})$/;
-    // Pattern for Currency: handles -R100.00, 100.00, or -100.00
-    const amountRegex = /[R-]?[\d\s,]+\.\d{2}/;
-
-    let tempTransaction = { date: null, description: null };
-
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-
-        // 1. If line is a Date, start a new transaction "block"
-        if (dateRegex.test(line)) {
-            tempTransaction = { date: line, description: null };
-            continue;
+    // Check if the line starts with a date
+    if (dateRegex.test(trimmedLine)) {
+      // Split the line by multiple spaces to separate columns
+      const parts = trimmedLine.split(/\s{2,}/); 
+      
+      if (parts.length >= 3) {
+        const date = parts[0];
+        const description = parts[1];
+        
+        // Capitec often puts Money Out in one column and Money In in another
+        // We need to find the value that looks like a currency amount
+        const amountStr = parts.find(p => /^-?\d+\.\d{2}$/.test(p.replace(',', '')));
+        
+        if (amountStr) {
+          // Convert "1,250.00" or "-450.00" to a clean number
+          const amount = parseFloat(amountStr.replace(',', ''));
+          
+          transactions.push({
+            date,
+            description,
+            amount,
+            approved: true // Default to selected for YouScan
+          });
         }
-
-        // 2. If we have a date but no description yet, this line is the description
-        if (tempTransaction.date && !tempTransaction.description) {
-            tempTransaction.description = line;
-            continue;
-        }
-
-        // 3. Look for the amount associated with the current date/description
-        if (tempTransaction.date && tempTransaction.description && amountRegex.test(line)) {
-            const amount = parseCurrency(line);
-            
-            // Capitec PDF rows often list Fee and Balance after the amount.
-            // We verify if this looks like a valid amount line.
-            transactions.push({
-                date: tempTransaction.date,
-                description: tempTransaction.description,
-                amount: amount,
-                balance: 0 // Defaulting to 0 if balance isn't easily tied to the row
-            });
-
-            // Reset for next potential match
-            tempTransaction = { date: null, description: null };
-        }
+      }
     }
+  });
 
-    if (transactions.length === 0) {
-        throw new Error("No transactions found. Please ensure this is a Capitec Transaction History page.");
-    }
-
-    return transactions;
-}
-
-function parseCurrency(val) {
-    // Strips R, spaces, and commas, then converts to a negative/positive float
-    const cleanValue = val.replace(/[R\s,]/g, '');
-    return parseFloat(cleanValue) || 0;
-}
+  console.log(`🔍 Capitec Parser found ${transactions.length} rows.`);
+  return transactions;
+};
