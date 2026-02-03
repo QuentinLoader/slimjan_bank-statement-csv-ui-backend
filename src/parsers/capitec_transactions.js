@@ -4,7 +4,7 @@ export const parseCapitec = (text) => {
 
   // Matches DD/MM/YYYY
   const dateRegex = /^(\d{2}\/\d{2}\/\d{4})/;
-  // Matches currency amounts with decimals (e.g., -150.00 or 2500.00)
+  // Matches currency amounts (e.g., -150.00, 2,500.00, 45.10)
   const amountRegex = /-?\d+[\d\s,]*\.\d{2}/;
 
   lines.forEach(line => {
@@ -13,36 +13,35 @@ export const parseCapitec = (text) => {
 
     if (dateMatch) {
       const date = dateMatch[0];
-      // Get everything after the date
-      let content = trimmed.replace(date, '').trim();
+      // Get the text following the date
+      let content = trimmed.slice(date.length).trim();
 
-      // Find all numbers that look like amounts
-      const amounts = content.match(amountRegex);
+      // Find all numbers that look like valid currency amounts
+      const amountMatches = content.match(amountRegex);
 
-      if (amounts && amounts.length > 0) {
-        // In Capitec, the first amount found is the transaction value
-        const rawAmount = amounts[0];
-        const amount = parseFloat(rawAmount.replace(/\s|,/g, ''));
+      if (amountMatches && amountMatches.length > 0) {
+        // In Capitec extraction, the transaction amount is typically 
+        // the first valid currency string found after the date.
+        const rawAmount = amountMatches[0];
+        const cleanAmount = parseFloat(rawAmount.replace(/\s|,/g, ''));
 
-        // Clean Description: Take everything before the amount and 
-        // stop if we hit common "Column Headers" that got merged
+        // Description is everything between the date and the amount
         let description = content.split(rawAmount)[0].trim();
         
-        // Fix for merged columns like "Transfer-1.00" or "Groceries-50.00"
-        description = description
-          .replace(/Transfer$/, '')
-          .replace(/Groceries$/, '')
-          .replace(/Fees$/, '')
-          .replace(/Other Income$/, '')
-          .replace(/Internet$/, '')
-          .trim();
+        // Remove common column headers if they got merged into the description
+        const noiseKeywords = ["Transfer", "Fees", "Other Income", "Internet", "Groceries", "Digital"];
+        noiseKeywords.forEach(keyword => {
+          if (description.endsWith(keyword)) {
+            description = description.slice(0, -keyword.length).trim();
+          }
+        });
 
-        // Safety check: ensure we don't include balance-only lines
-        if (!description.toLowerCase().includes('balance') && description.length > 1) {
+        // Filter out balance-only or empty lines
+        if (description && !description.toLowerCase().includes('balance')) {
           transactions.push({
             date,
             description: description || "Bank Transaction",
-            amount,
+            amount: cleanAmount,
             approved: true
           });
         }
@@ -50,5 +49,6 @@ export const parseCapitec = (text) => {
     }
   });
 
+  console.log(`✅ YouScan Engine found ${transactions.length} Capitec transactions.`);
   return transactions;
 };
