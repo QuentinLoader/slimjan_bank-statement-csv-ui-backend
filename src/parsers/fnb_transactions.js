@@ -2,10 +2,10 @@ export const parseFnb = (text) => {
   const transactions = [];
 
   // 1. FLATTEN THE TEXT
-  // Turn vertical "shredded" text into a single horizontal stream
+  // Fixes the "shredded" logs by merging everything into one stream.
   const cleanText = text.replace(/\s+/g, ' ');
 
-  // DEBUG LOG: This will show us exactly what the parser sees in the logs
+  // DEBUG: verify what the parser sees
   console.log("🔍 FNB Flattened Snippet:", cleanText.substring(0, 600));
 
   // 2. METADATA
@@ -28,7 +28,7 @@ export const parseFnb = (text) => {
 
   // 3. UNIVERSAL TRANSACTION REGEX
   // Captures 3 distinct date formats:
-  // 1. YYYY/MM/DD (2025/12/19) - Common in your logs
+  // 1. YYYY/MM/DD (2025/12/19)
   // 2. DD/MM/YYYY (19/12/2025)
   // 3. DD MMM (19 Dec)
   const transactionRegex = /((?:\d{4}[\/\-]\d{2}[\/\-]\d{2})|(?:\d{2}[\/\-]\d{2}[\/\-]\d{4})|(?:\d{1,2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Mrt|Mei|Okt|Des)))\s+(.+?)\s+([\d\s,]+[.,]\d{2})\s+([\d\s,]+[.,]\d{2})\s?([A-Za-z0-9]{0,3})?/gi;
