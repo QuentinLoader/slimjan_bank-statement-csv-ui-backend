@@ -8,31 +8,36 @@ export const parseStatement = async (fileBuffer) => {
     const text = data.text;
     const lowerText = text.toLowerCase();
 
-    // 1. CAPITEC CHECK (Priority 1)
-    // If it says "capitec", it IS Capitec. Stop checking anything else.
+    // 🔍 DEBUG: Log the header so you can see exactly what the server sees
+    console.log("📄 PDF Header Snippet:", text.substring(0, 300).replace(/\n/g, ' '));
+
+    // 1. CAPITEC CHECK (Priority)
+    // If it has these keywords, it is definitely Capitec.
     if (lowerText.includes("capitec") || lowerText.includes("unique document no")) {
       console.log("🏦 Detected Bank: Capitec");
+      const transactions = parseCapitec(text);
+      console.log(`📊 Extracted ${transactions.length} items from Capitec`);
       return {
-        transactions: parseCapitec(text),
+        transactions,
         bankName: "Capitec",
         bankLogo: "capitec"
       };
     } 
     
-    // 2. FNB CHECK (Priority 2)
-    // Only checks this if it is NOT Capitec
-    if (lowerText.includes("fnb") || lowerText.includes("first national bank")) {
+    // 2. FNB CHECK
+    if (lowerText.includes("fnb") || lowerText.includes("first national bank") || lowerText.includes("bbst")) {
       console.log("🏦 Detected Bank: FNB");
+      const transactions = parseFnb(text);
+      console.log(`📊 Extracted ${transactions.length} items from FNB`);
       return {
-        transactions: parseFnb(text), // We leave this here but won't focus on it now
+        transactions,
         bankName: "FNB",
         bankLogo: "fnb"
       };
     } 
 
     // 3. FALLBACK
-    // If we really can't tell, default to Capitec (safest bet for you)
-    console.warn("⚠️ Bank not recognized. Defaulting to Capitec.");
+    console.warn("⚠️ Bank signature not found. Defaulting to Capitec.");
     return {
       transactions: parseCapitec(text),
       bankName: "Capitec",
@@ -40,7 +45,7 @@ export const parseStatement = async (fileBuffer) => {
     };
 
   } catch (error) {
-    console.error("❌ Parsing Error:", error.message);
+    console.error("❌ Critical Parsing Error:", error.message);
     return { transactions: [], bankName: "Error", bankLogo: "error" };
   }
 };
