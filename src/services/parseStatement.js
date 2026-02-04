@@ -11,20 +11,23 @@ export const parseStatement = async (fileBuffer) => {
 
     console.log("📄 PDF Header Snippet:", text.substring(0, 300).replace(/\n/g, ' '));
 
-    // 1. CAPITEC CHECK (Priority 1)
-    if (lowerText.includes("capitec") || lowerText.includes("unique document no")) {
+    // 1. CAPITEC CHECK (Stricter)
+    // We removed the loose 'includes("capitec")' check.
+    // Now it requires specific header phrases found in Capitec statements.
+    if (lowerText.includes("unique document no") || 
+        lowerText.includes("capitec bank limited") || 
+        lowerText.includes("client care centre")) {
       console.log("🏦 Detected Bank: Capitec");
       return { transactions: parseCapitec(text), bankName: "Capitec", bankLogo: "capitec" };
     } 
 
-    // 2. ABSA CHECK (Priority 2)
+    // 2. ABSA CHECK
     if (lowerText.includes("absa") && (lowerText.includes("cheque account") || lowerText.includes("absa bank"))) {
       console.log("🏦 Detected Bank: ABSA");
       return { transactions: parseAbsa(text), bankName: "ABSA", bankLogo: "absa" };
     }
     
-    // 3. FNB CHECK (Priority 3)
-    // We look for specific FNB indicators like "bbst" (Branch Code) or "rekeningnommer"
+    // 3. FNB CHECK
     if (lowerText.includes("fnb") || lowerText.includes("first national bank") || lowerText.includes("bbst") || lowerText.includes("rekeningnommer")) {
       console.log("🏦 Detected Bank: FNB");
       return { transactions: parseFnb(text), bankName: "FNB", bankLogo: "fnb" };
