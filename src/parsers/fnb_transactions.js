@@ -2,7 +2,7 @@ export const parseFnb = (text) => {
   const transactions = [];
 
   // 1. ISOLATE THE TRANSACTION ZONE
-  // We use simple indices to find the core data and ignore the noisy header/footer.
+  // We locate the core data block to ignore noisy header/footer info.
   const lowerText = text.toLowerCase();
   let startIdx = lowerText.indexOf("opening balance");
   if (startIdx === -1) startIdx = lowerText.indexOf("opening saldo");
@@ -16,11 +16,9 @@ export const parseFnb = (text) => {
     endIdx !== -1 ? endIdx : text.length
   );
 
-  // Normalize whitespace but preserve order
   let cleanZone = activeZone.replace(/\s+/g, ' ');
 
-  // 2. METADATA
-  // Targets the clean 11-digit sequence found later in the header
+  // 2. METADATA EXTRACTION
   const accountMatch = text.match(/(?:Account Number|Gold Business Account|ZFN 0:)\s*:?\s*(\d{11})/i);
   const account = accountMatch ? accountMatch[1] : "62854836693";
   
@@ -29,7 +27,7 @@ export const parseFnb = (text) => {
   if (headerDateMatch) statementYear = parseInt(headerDateMatch[1]);
 
   // 3. SEQUENTIAL SCANNER
-  // Anchor on any date format found in FNB statements
+  // Anchor on date formats (e.g., "17 Jan" or "2026/01/17")
   const dateRegex = /(\d{1,2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Mrt|Mei|Okt|Des)|(?:\d{4}\/\d{2}\/\d{2}))/gi;
   
   const dateMatches = [];
@@ -42,15 +40,15 @@ export const parseFnb = (text) => {
     const current = dateMatches[i];
     const next = dateMatches[i+1];
     
-    // LOOK-BACK: Text from the previous transaction to this date
+    // LOOK-BACK: Capture text preceding the date (useful for multi-line descriptions)
     const prevEnd = i === 0 ? 0 : dateMatches[i-1].index + dateMatches[i-1].dateStr.length;
     const lookBackText = cleanZone.substring(prevEnd, current.index).trim();
     
-    // LOOK-FORWARD: Text from this date to the next date
+    // LOOK-FORWARD: Capture text following the date until the next date anchor
     const nextStart = next ? next.index : cleanZone.length;
     const lookForwardText = cleanZone.substring(current.index + current.dateStr.length, nextStart).trim();
 
-    // Find Amounts and Balances (The last two numbers in this segment)
+    // Find Amount and Balance (the last two numbers in the block)
     const moneyRegex = /([\d\s,]+[.,]\d{2}\s?(?:Cr|Dr|Dt|Kt)?)(?!\d)/gi;
     const amountsFound = lookForwardText.match(moneyRegex) || [];
 
@@ -66,20 +64,20 @@ export const parseFnb = (text) => {
       let amount = cleanNum(rawAmount);
       const balance = cleanNum(rawBalance);
 
-      // Description is text before the date + text before the amount
+      // Description is text before the date combined with text before the amount
       let localDesc = lookForwardText.split(rawAmount)[0].trim();
       let description = (lookBackText + " " + localDesc).trim();
 
-      // Final scrubbing of indicators and "ghost" numbers
+      // Final scrub of indicators and leading stray numbers
       description = description.replace(/^(Kt|Dt|Dr|Cr)\s+/gi, '');
       description = description.replace(/^[\d\s\.,]{3,}/, ''); 
       description = description.replace(/^#/, '').trim();
 
-      // Sign Logic: Explicit Credit indicator means positive
+      // Sign Logic: Explicit Credit indicator means positive income
       const isCredit = rawAmount.toUpperCase().includes("CR") || rawAmount.toUpperCase().includes("KT");
       if (!isCredit) amount = -Math.abs(amount);
 
-      // Date Formatting
+      // Normalize Date
       let formattedDate = current.dateStr;
       if (current.dateStr.includes(' ')) {
         const [day, monthStr] = current.dateStr.split(" ");
@@ -93,7 +91,7 @@ export const parseFnb = (text) => {
 
       transactions.push({
         date: formattedDate,
-        description: description || "#Online Payment History",
+        description: description || "Transaction",
         amount,
         balance,
         account,
