@@ -13,7 +13,7 @@ export const parseFnb = (text) => {
   cleanText = cleanText.replace(/(\d{4})[\/\-](\d{2})[\/\-](\d{2})/g, " $1/$2/$3 ");
   cleanText = cleanText.replace(/(\d{2})[\/\-](\d{2})[\/\-](\d{4})/g, " $1/$2/$3 ");
 
-  // 2. FIXED ACCOUNT NUMBER
+  // 2. METADATA EXTRACTION
   // Grabs the 11 digits after the account type header
   const accountMatch = cleanText.match(/(?:Account Number|Gold Business Account|Rekeningnommer).*?(\d{11})/i);
   const account = accountMatch ? accountMatch[1] : "62854836693"; 
@@ -36,58 +36,87 @@ export const parseFnb = (text) => {
     const potentialDate = parts[i].trim();
     
     if (potentialDate.match(dateRegex) && potentialDate.length < 20) {
-        const dataBlock = parts[i+1].trim(); 
+        let dataBlock = parts[i+1].trim(); 
         
         // Header Guard
         const lowerBlock = dataBlock.toLowerCase();
-        if (lowerBlock.includes("opening balance") || lowerBlock.includes("brought forward")) {
-            i++; carryOverDescription = ""; continue;
+        if (lowerBlock.includes("opening balance") || 
+            lowerBlock.includes("brought forward") || 
+            lowerBlock.includes("description amount balance")) {
+            i++; 
+            carryOverDescription = ""; 
+            continue;
         }
 
-        // 4. NUMBER EXTRACTION
-        const moneyRegex = /([\d\s,]+[.,]\d{2}(?:\s?Cr|Dr|Dt|Kt)?)(?!\d)/gi;
-        const allNumbers = dataBlock.match(moneyRegex) || [];
+        // CRITICAL FIX #1: Remove "Closing Balance" line to avoid duplicate number matches
+        // This prevents the sandwich transaction from picking up wrong amounts
+        dataBlock = dataBlock.replace(/Closing Balance.*$/i, '').trim();
 
-        if (allNumbers.length >= 2) {
-            const rawAmount = allNumbers[allNumbers.length - 2];
-            const rawBalance = allNumbers[allNumbers.length - 1];
+        // 4. NUMBER EXTRACTION
+        // Find all money amounts with optional sign indicators
+        const moneyRegex = /([\d\s,]+\.\d{2})\s?(Cr|Dr|Dt|Kt)?/gi;
+        const allMatches = [...dataBlock.matchAll(moneyRegex)];
+
+        if (allMatches.length >= 2) {
+            // Last two numbers are: amount (transaction) and balance (running total)
+            const amountMatch = allMatches[allMatches.length - 2];
+            const balanceMatch = allMatches[allMatches.length - 1];
             
-            const cleanNum = (val) => {
-                let v = val.replace(/[R\s]/gi, '').replace(/(Cr|Dr|Dt|Kt)/gi, '');
-                return parseFloat(v.replace(/,/g, ''));
+            const cleanNum = (matchObj) => {
+                const numStr = matchObj[1].replace(/[\s,]/g, '');
+                return parseFloat(numStr);
             };
 
-            let amount = cleanNum(rawAmount);
-            const balance = cleanNum(rawBalance);
+            let amount = cleanNum(amountMatch);
+            const balance = cleanNum(balanceMatch);
 
             // 5. DESCRIPTION STITCHING
-            let localDesc = dataBlock.split(rawAmount)[0].trim();
+            // Extract everything BEFORE the amount number starts
+            const descEndIndex = amountMatch.index;
+            let localDesc = dataBlock.substring(0, descEndIndex).trim();
+            
+            // Combine with carry-over buffer from previous blocks
             let description = (carryOverDescription + " " + localDesc).trim();
             
-            // Scrubbing
+            // Scrubbing: Remove leading numbers and sign indicators
             description = description.replace(/^[\d\s\.,]+/, '').trim(); 
             description = description.replace(/^(Kt|Dt|Dr|Cr)\s+/, '').trim();
-            description = description.replace(/^#/, '').trim();
+            description = description.replace(/\s+/g, ' ').trim();
 
-            // 6. SIGN LOGIC
-            const upperAmount = rawAmount.toUpperCase();
-            if (upperAmount.includes("CR") || upperAmount.includes("KT")) {
-                amount = Math.abs(amount);
+            // 6. SIGN LOGIC (GATEKEEPER RULE 3)
+            // Business accounts: Cr/Kt = Income (+), everything else = Expense (-)
+            const amountSign = amountMatch[2] || '';
+            if (amountSign.toUpperCase() === 'CR' || amountSign.toUpperCase() === 'KT') {
+                amount = Math.abs(amount);  // Credit = Positive
             } else {
-                amount = -Math.abs(amount);
+                amount = -Math.abs(amount); // Debit = Negative
             }
 
-            // 7. DATE NORMALIZATION
+            // 7. DATE NORMALIZATION - CRITICAL FIX #2
+            // Convert all dates to DD/MM/YYYY format for consistency
             let formattedDate = potentialDate;
+            
+            // Text dates like "17 Jan" -> "17/01/2026"
             if (potentialDate.match(/[a-zA-Z]/)) {
-                const [day, monthStr] = potentialDate.split(" ");
-                const monthMap = { jan:"01", feb:"02", mar:"03", apr:"04", may:"05", jun:"06", jul:"07", aug:"08", sep:"09", oct:"10", nov:"11", dec:"12" };
-                const month = monthMap[monthStr.toLowerCase().substring(0,3)] || "01";
-                formattedDate = `${day.padStart(2, '0')}/${month}/${statementYear}`;
-            } else if (potentialDate.match(/^\d{4}/)) {
+                const dateParts = potentialDate.split(/\s+/);
+                const day = dateParts[0].padStart(2, '0');
+                const monthStr = dateParts[1].toLowerCase().substring(0, 3);
+                const monthMap = { 
+                    jan:"01", feb:"02", mar:"03", mrt:"03", 
+                    apr:"04", may:"05", mei:"05",
+                    jun:"06", jul:"07", aug:"08", 
+                    sep:"09", oct:"10", okt:"10", 
+                    nov:"11", dec:"12", des:"12"
+                };
+                const month = monthMap[monthStr] || "01";
+                formattedDate = `${day}/${month}/${statementYear}`;
+            } 
+            // YYYY/MM/DD format -> DD/MM/YYYY
+            else if (potentialDate.match(/^\d{4}\//)) {
                 const p = potentialDate.split('/');
                 formattedDate = `${p[2]}/${p[1]}/${p[0]}`;
             }
+            // DD/MM/YYYY format stays as-is
 
             transactions.push({
                 date: formattedDate,
@@ -100,11 +129,16 @@ export const parseFnb = (text) => {
                 bankName: "FNB"
             });
 
-            // Capture trailing text for the next date
-            carryOverDescription = dataBlock.split(rawBalance)[1]?.trim() || "";
+            // 8. CARRY-OVER BUFFER UPDATE
+            // Capture any text after the balance number for next iteration
+            const balanceEndIndex = balanceMatch.index + balanceMatch[0].length;
+            const remaining = dataBlock.substring(balanceEndIndex).trim();
+            
+            // Clean up trailing sign indicators
+            carryOverDescription = remaining.replace(/^(Cr|Dr|Kt|Dt)\s+/i, '').trim();
 
         } else {
-            // Buffer the current block if no money is found
+            // No amount/balance found - buffer the current block
             carryOverDescription = (carryOverDescription + " " + dataBlock).trim();
         }
         i++; 
