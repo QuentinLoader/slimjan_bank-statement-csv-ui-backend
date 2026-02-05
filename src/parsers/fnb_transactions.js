@@ -1,64 +1,113 @@
 export const parseFnb = (text) => {
   const transactions = [];
+
+  // 1. DE-MASHING & CLEANUP
   let cleanText = text.replace(/\s+/g, ' ');
+  // Split mashed digits/letters and mashed amounts
+  cleanText = cleanText.replace(/(\d)([a-zA-Z])/g, '$1 $2');
+  cleanText = cleanText.replace(/([a-z])([A-Z])/g, '$1 $2');
+  cleanText = cleanText.replace(/([a-zA-Z])(\d)/g, '$1 $2');
+  cleanText = cleanText.replace(/(\.\d{2})(\d)/g, '$1 $2');
+  
+  // Normalize date delimiters
+  cleanText = cleanText.replace(/(\d{4})[\/\-](\d{2})[\/\-](\d{2})/g, " $1/$2/$3 ");
+  cleanText = cleanText.replace(/(\d{2})[\/\-](\d{2})[\/\-](\d{4})/g, " $1/$2/$3 ");
 
-  // 1. STRICK ACCOUNT NUMBER PICKUP
-  // Look for 11 digits that AREN'T preceded by branch codes
-  const accountMatch = cleanText.match(/(?:Account Number|Rekeningnommer|Account)\s*:?\s*(\d{11})/i);
-  const account = accountMatch ? accountMatch[1] : "62854836693";
+  // 2. FIXED ACCOUNT NUMBER (Strict 11-digit check)
+  // Look for 11 digits at the end of the metadata string to avoid branch codes (115)
+  const accountMatch = cleanText.match(/(?:Account Number|Gold Business Account|Rekeningnommer).*?(\d{11})/i);
+  const account = accountMatch ? accountMatch[1] : "62854836693"; 
 
-  // 2. BLOCK SPLITTING BY DATE
-  const dateRegex = /(\d{1,2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Mrt|Mei|Okt|Des))/gi;
+  const clientMatch = cleanText.match(/(?:THE DIRECTOR|MR\s+[A-Z\s]{5,40})/i);
+  const clientName = clientMatch ? clientMatch[0].trim() : "Client Name";
+
+  let statementYear = 2026;
+  const headerDateMatch = cleanText.match(/(\d{4})\/\d{2}\/\d{2}/);
+  if (headerDateMatch) statementYear = parseInt(headerDateMatch[1]);
+
+  // 3. BLOCK SPLITTING STRATEGY
+  const dateRegex = /((?:\d{4}\/\d{2}\/\d{2})|(?:\d{2}\/\d{2}\/\d{4})|(?:\d{1,2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Mrt|Mei|Okt|Des)))/gi;
   const parts = cleanText.split(dateRegex);
 
-  // We use this to store text that belongs to the NEXT date found
-  let carryOverText = "";
+  let carryOverDescription = "";
 
-  for (let i = 1; i < parts.length; i += 2) {
-    const date = parts[i];
-    const content = parts[i + 1];
+  for (let i = 0; i < parts.length - 1; i++) {
+    const potentialDate = parts[i].trim();
+    
+    if (potentialDate.match(dateRegex) && potentialDate.length < 20) {
+        const dataBlock = parts[i+1].trim(); 
+        
+        // Header Guard
+        const lowerBlock = dataBlock.toLowerCase();
+        if (lowerBlock.includes("opening balance") || lowerBlock.includes("brought forward") || lowerBlock.includes("service fees")) {
+            i++; carryOverDescription = ""; continue;
+        }
 
-    // The Description is often the text that came BEFORE the date in the raw stream
-    // We grab the carryOverText (from the previous loop) + any text before the first number
-    const moneyRegex = /([\d\s,]+[.,]\d{2}\s?(?:Cr|Dr|Dt|Kt)?)(?!\d)/gi;
-    const amountsFound = content.match(moneyRegex) || [];
+        // 4. IMPROVED NUMBER EXTRACTION
+        const moneyRegex = /([\d\s,]+[.,]\d{2}(?:\s?Cr|Dr|Dt|Kt)?)(?!\d)/gi;
+        const allNumbers = dataBlock.match(moneyRegex) || [];
 
-    if (amountsFound.length >= 2) {
-      const rawAmount = amountsFound[amountsFound.length - 2];
-      const rawBalance = amountsFound[amountsFound.length - 1];
+        if (allNumbers.length >= 2) {
+            const rawAmount = allNumbers[allNumbers.length - 2];
+            const rawBalance = allNumbers[allNumbers.length - 1];
+            
+            const cleanNum = (val) => {
+                let v = val.replace(/[R\s]/gi, '').replace(/(Cr|Dr|Dt|Kt)/gi, '');
+                return parseFloat(v.replace(/,/g, ''));
+            };
 
-      // Extract Description: Take carryOverText + text in this block before the amount
-      let localDesc = content.split(rawAmount)[0].trim();
-      let fullDesc = (carryOverText + " " + localDesc).trim();
+            let amount = cleanNum(rawAmount);
+            const balance = cleanNum(rawBalance);
 
-      // Clean the description
-      fullDesc = fullDesc.replace(/^(Cr|Dr|Dt|Kt|#)\s+/gi, '').trim();
-      fullDesc = fullDesc.replace(/^[\d\s\.,]{3,}/, '').trim(); // Remove stray leading numbers
+            // 5. DESCRIPTION FIX (Stitching the Floating Text)
+            let localDesc = dataBlock.split(rawAmount)[0].trim();
+            // Stitch carryOver (text from above the date) with localDesc (text after the date)
+            let description = (carryOverDescription + " " + localDesc).trim();
+            
+            // Scrubbing
+            description = description.replace(/^[\d\s\.,]+/, '').trim(); 
+            description = description.replace(/^(Kt|Dt|Dr|Cr)\s+/, '').trim();
+            description = description.replace(/^#/, '').trim();
 
-      // Amount Parsing
-      let amount = parseFloat(rawAmount.replace(/[^\d.]/g, ''));
-      const balance = parseFloat(rawBalance.replace(/[^\d.]/g, ''));
+            // 6. SIGN LOGIC
+            const upperAmount = rawAmount.toUpperCase();
+            if (upperAmount.includes("CR") || upperAmount.includes("KT")) {
+                amount = Math.abs(amount);
+            } else {
+                amount = -Math.abs(amount);
+            }
 
-      // Sign Logic: Cr/Kt = Positive. Everything else in Business = Negative.
-      if (!rawAmount.toUpperCase().includes("CR") && !rawAmount.toUpperCase().includes("KT")) {
-        amount = -Math.abs(amount);
-      }
+            // 7. DATE NORMALIZATION
+            let formattedDate = potentialDate;
+            if (potentialDate.match(/[a-zA-Z]/)) {
+                const [day, monthStr] = potentialDate.split(" ");
+                const monthMap = { jan:"01", feb:"02", mar:"03", apr:"04", may:"05", jun:"06", jul:"07", aug:"08", sep:"09", oct:"10", nov:"11", dec:"12" };
+                const month = monthMap[monthStr.toLowerCase().substring(0,3)] || "01";
+                formattedDate = `${day.padStart(2, '0')}/${month}/${statementYear}`;
+            } else if (potentialDate.match(/^\d{4}/)) {
+                const p = potentialDate.split('/');
+                formattedDate = `${p[2]}/${p[1]}/${p[0]}`;
+            }
 
-      transactions.push({
-        date: `${date} 2026`, // Normalizing year
-        description: fullDesc || "#Online Payment History",
-        amount,
-        balance,
-        account,
-        bankName: "FNB"
-      });
+            transactions.push({
+                date: formattedDate,
+                description: description || "#Online Payment History", // Force label if still blank
+                amount,
+                balance,
+                account,
+                clientName,
+                uniqueDocNo: "Check Header",
+                bankName: "FNB"
+            });
 
-      // Update carryOverText for the next transaction
-      // Anything after the balance usually belongs to the next date
-      carryOverText = content.split(rawBalance)[1] || "";
-    } else {
-      // If no numbers found, this whole block is likely description for the next date
-      carryOverText = content;
+            // Capture text AFTER the balance for the NEXT transaction's description
+            carryOverDescription = dataBlock.split(rawBalance)[1]?.trim() || "";
+
+        } else {
+            // No numbers? This whole block is a description for the next date
+            carryOverDescription = (carryOverDescription + " " + dataBlock).trim();
+        }
+        i++; 
     }
   }
 
