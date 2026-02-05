@@ -1,15 +1,20 @@
 export const parseFnb = (text) => {
   const transactions = [];
 
-  // 1. DE-MASHING ENGINE (Updated)
+  // 1. DE-MASHING ENGINE
+  // This cleans up the raw text stream to make it parsable
   let cleanText = text.replace(/\s+/g, ' ');
-  // Split CamelCase (e.g., "DesPOS" -> "Des POS") - FIXES THE MERGED TRANSACTIONS
+
+  // FIX: Split CamelCase (e.g. "DesPOS" -> "Des POS") to reveal hidden Dates
   cleanText = cleanText.replace(/([a-z])([A-Z])/g, '$1 $2');
-  // Split Digit-Letter (e.g., "19Jan" -> "19 Jan")
+  
+  // FIX: Split Letters/Numbers (e.g. "19Jan" -> "19 Jan")
   cleanText = cleanText.replace(/(\d)([a-zA-Z])/g, '$1 $2');
   cleanText = cleanText.replace(/([a-zA-Z])(\d)/g, '$1 $2');
-  // Split mashed amounts (e.g., "100.00200.00" -> "100.00 200.00")
+  
+  // FIX: Split mashed amounts (e.g. "100.00200.00" -> "100.00 200.00")
   cleanText = cleanText.replace(/(\.\d{2})(\d)/g, '$1 $2');
+  
   // Normalize date delimiters
   cleanText = cleanText.replace(/(\d{4})[\/\-](\d{2})[\/\-](\d{2})/g, " $1/$2/$3 ");
   cleanText = cleanText.replace(/(\d{2})[\/\-](\d{2})[\/\-](\d{4})/g, " $1/$2/$3 ");
@@ -20,27 +25,37 @@ export const parseFnb = (text) => {
   const account = accountMatch ? accountMatch[1] : "63049357064"; 
   const clientName = clientMatch ? clientMatch[0].trim() : "MR QUENTIN LOADER";
 
-  // 2. SMART YEAR LOGIC
-  // We find the "Statement Date" to use as the anchor.
-  let statementDate = new Date(); // Default to today
-  // Look for YYYY/MM/DD header date (e.g. 2026/01/19)
+  // Year Logic
+  let statementDate = new Date();
   const headerDateMatch = cleanText.match(/(\d{4})\/(\d{2})\/(\d{2})/);
   if (headerDateMatch) {
       statementDate = new Date(`${headerDateMatch[1]}-${headerDateMatch[2]}-${headerDateMatch[3]}`);
   }
 
-  // 3. BLOCK SPLITTING
-  // Regex for all date formats.
+  // 2. BLOCK SPLITTING (The Core Logic)
+  // We split the entire text by anything that looks like a Date.
   const dateRegex = /((?:\d{4}\/\d{2}\/\d{2})|(?:\d{2}\/\d{2}\/\d{4})|(?:\d{1,2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Mrt|Mei|Okt|Des)))/gi;
   const parts = cleanText.split(dateRegex);
 
+  // Loop through the split blocks
   for (let i = 0; i < parts.length - 1; i++) {
     const potentialDate = parts[i].trim();
     const dataBlock = parts[i+1].trim(); 
 
+    // Is this a valid date?
     if (potentialDate.match(dateRegex) && potentialDate.length < 20) {
         
-        // Extract Numbers (Last 2 are Amount & Balance)
+        // 3. HEADER GUARD (Fix for Point 2)
+        // If the text block contains "Opening Balance" or "Account", it's not a transaction. Skip it.
+        if (dataBlock.toLowerCase().includes("opening balance") || 
+            dataBlock.toLowerCase().includes("brought forward") || 
+            dataBlock.toLowerCase().includes("current account") ||
+            dataBlock.includes("Rekeningnommer")) {
+            i++; continue;
+        }
+
+        // 4. NUMBER EXTRACTION
+        // We look for all money-like numbers in the block
         const moneyRegex = /([R\-\s]*[\d\s]+[.,]\d{2})(?!\d)/g;
         const allNumbers = dataBlock.match(moneyRegex);
 
@@ -51,37 +66,38 @@ export const parseFnb = (text) => {
                 return parseFloat(v.replace(/,/g, ''));
             };
 
+            // STRICT RULE: The LAST number is Balance. The SECOND LAST is Amount.
             const rawAmount = allNumbers[allNumbers.length - 2];
             const rawBalance = allNumbers[allNumbers.length - 1];
+            
             let amount = cleanNum(rawAmount);
             const balance = cleanNum(rawBalance);
 
-            // Description Cleanup
+            // 5. DESCRIPTION SCRUBBING (Fix for Point 3)
+            // Everything before the amount is the Description
             let description = dataBlock.split(rawAmount)[0].trim();
-            // Remove leftover numbers at start (Fixes "7.50 15.28" issue)
+
+            // ORPHAN REMOVER: Remove stray numbers from the start of description
+            // e.g., "7.50 15.28 Netflix" -> "Netflix"
             description = description.replace(/^[\d\s\.,]+/, '').trim();
-            // Remove codes
+            
+            // Remove bank codes
             description = description.replace(/^(Kt|Dt|Dr|Cr)\s+/, '').trim();
 
-            // DATE PARSING & YEAR CORRECTION
+            // 6. DATE FORMATTING
             let formattedDate = potentialDate;
-            
             if (potentialDate.match(/[a-zA-Z]/)) { // "19 Jan"
                 const [day, monthStr] = potentialDate.split(" ");
                 const monthMap = { jan:"01", feb:"02", mar:"03", apr:"04", may:"05", jun:"06", jul:"07", aug:"08", sep:"09", oct:"10", nov:"11", dec:"12" };
                 const monthStr3 = monthStr.toLowerCase().substring(0,3);
                 const month = monthMap[monthStr3] || "01";
                 
-                // Logic: If Transaction Month > Statement Month (by a margin), it's previous year.
-                // e.g. Trans Dec (12), Stmt Jan (01) -> Year = StmtYear - 1
+                // Rollback Year Logic
                 const stmtYear = statementDate.getFullYear();
                 const stmtMonth = statementDate.getMonth() + 1;
                 const transMonthInt = parseInt(month);
-
                 let year = stmtYear;
-                if (transMonthInt > stmtMonth + 1) { 
-                    year = stmtYear - 1;
-                }
+                if (transMonthInt > stmtMonth + 1) year = stmtYear - 1;
                 
                 formattedDate = `${day.padStart(2, '0')}/${month}/${year}`;
             } else if (potentialDate.match(/^\d{4}/)) { // 2026/01/19
@@ -89,16 +105,16 @@ export const parseFnb = (text) => {
                 formattedDate = `${p[2]}/${p[1]}/${p[0]}`;
             }
 
-            // SIGN CORRECTION
+            // 7. SIGN CORRECTION
             const textAfterAmount = dataBlock.split(rawAmount)[1] || "";
             if (rawAmount.includes('-')) {
-                amount = -Math.abs(amount); 
+                amount = -Math.abs(amount);
             } else if (textAfterAmount.toLowerCase().includes("dt")) {
                 amount = -Math.abs(amount);
             } else if (textAfterAmount.toLowerCase().includes("kt")) {
-                amount = Math.abs(amount); 
+                amount = Math.abs(amount);
             } else {
-                const debitKeywords = ["purchase", "fee", "payment", "debit", "withdrawal", "tikkie", "uber", "netflix"];
+                const debitKeywords = ["purchase", "fee", "payment", "debit", "withdrawal", "tikkie", "uber", "netflix", "checkers"];
                 if (debitKeywords.some(k => description.toLowerCase().includes(k))) {
                     amount = -Math.abs(amount);
                 }
@@ -115,7 +131,7 @@ export const parseFnb = (text) => {
                 bankName: "FNB"
             });
         }
-        i++; // Skip next block (data)
+        i++; 
     }
   }
 
