@@ -1,29 +1,24 @@
 export const parseFnb = (text) => {
   const transactions = [];
 
-  // 1. DE-MASHING ENGINE (Crucial for FNB 2)
+  // 1. DE-MASHING & CLEANUP
   let cleanText = text.replace(/\s+/g, ' ');
-
-  // Force split CamelCase (e.g., "DesPOS" -> "Des POS")
+  // Split CamelCase
   cleanText = cleanText.replace(/([a-z])([A-Z])/g, '$1 $2');
-
-  // Force split Letters/Numbers (e.g., "19Jan" -> "19 Jan")
+  // Split Letters/Numbers
   cleanText = cleanText.replace(/(\d)([a-zA-Z])/g, '$1 $2');
   cleanText = cleanText.replace(/([a-zA-Z])(\d)/g, '$1 $2');
-
-  // Force split mashed amounts (e.g., "100.00200.00" -> "100.00 200.00")
-  // This solves the "Amount rows contain multiple values" issue
+  // Split mashed amounts
   cleanText = cleanText.replace(/(\.\d{2})(\d)/g, '$1 $2');
-
   // Normalize date delimiters
   cleanText = cleanText.replace(/(\d{4})[\/\-](\d{2})[\/\-](\d{2})/g, " $1/$2/$3 ");
   cleanText = cleanText.replace(/(\d{2})[\/\-](\d{2})[\/\-](\d{4})/g, " $1/$2/$3 ");
 
   // Metadata
   const accountMatch = cleanText.match(/(?:Account|Rekeningnommer).*?(\d{11})/i);
-  const clientMatch = cleanText.match(/MR\s+[A-Z\s]{5,40}(?=\s+(?:VAN|PO BOX|POSBUS|STREET|WEG))/i);
-  const account = accountMatch ? accountMatch[1] : "63049357064"; 
-  const clientName = clientMatch ? clientMatch[0].trim() : "MR QUENTIN LOADER";
+  const clientMatch = cleanText.match(/THE DIRECTOR|MR\s+[A-Z\s]{5,40}/i);
+  const account = accountMatch ? accountMatch[1] : "Check Header"; 
+  const clientName = clientMatch ? clientMatch[0].trim() : "Client Name";
 
   // Year Logic
   let statementDate = new Date();
@@ -33,11 +28,15 @@ export const parseFnb = (text) => {
   }
 
   // 2. BLOCK SPLITTING STRATEGY
-  // We split the text by Date. This creates "blocks" of data for each transaction.
+  // We split by Date.
   const dateRegex = /((?:\d{4}\/\d{2}\/\d{2})|(?:\d{2}\/\d{2}\/\d{4})|(?:\d{1,2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Mrt|Mei|Okt|Des)))/gi;
   const parts = cleanText.split(dateRegex);
 
-  // Iterate through parts: [Text before Date] -> [Date] -> [Data Block]
+  // "Carry-Over" Description Buffer
+  // If we find text at the end of Block A that belongs to Block B, we store it here.
+  let descriptionBuffer = "";
+
+  // Loop through parts: [Text_Before_Date] -> [Date] -> [Text_After_Date]
   for (let i = 0; i < parts.length - 1; i++) {
     const potentialDate = parts[i].trim();
     
@@ -45,49 +44,73 @@ export const parseFnb = (text) => {
     if (potentialDate.match(dateRegex) && potentialDate.length < 20) {
         const dataBlock = parts[i+1].trim(); 
         
-        // 3. HEADER GUARD (Solves "First line is wrong")
-        // We explicitly skip blocks that contain header keywords. 
-        // This removes the "Opening Balance" line from FNB 2.
+        // Header Guard
         const lowerBlock = dataBlock.toLowerCase();
         if (lowerBlock.includes("opening balance") || 
             lowerBlock.includes("brought forward") || 
             lowerBlock.includes("current account") ||
-            lowerBlock.includes("rekeningnommer") ||
-            lowerBlock.includes("statement period") ||
-            lowerBlock.includes("reference number")) { 
-            i++; continue;
+            lowerBlock.includes("statement period")) { 
+            i++; descriptionBuffer = ""; continue;
         }
 
-        // 4. NUMBER EXTRACTION
-        // We look for money-like numbers in the block
-        const moneyRegex = /([R\-\s]*[\d\s]+[.,]\d{2})(?!\d)/g;
+        // 3. NUMBER EXTRACTION
+        // Match numbers, optionally with Cr/Dr/Dt suffix
+        const moneyRegex = /([R\-\s]*[\d\s]+[.,]\d{2}(?:Cr|Dr|Dt)?)(?!\d)/gi;
         const allNumbers = dataBlock.match(moneyRegex);
 
         if (allNumbers && allNumbers.length >= 2) {
             const cleanNum = (val) => {
                 let v = val.replace(/[R\s]/g, '');
-                if (v.includes(',') && !v.includes('.')) v = v.replace(',', '.');
-                return parseFloat(v.replace(/,/g, ''));
+                // Keep Cr/Dr markers for logic, strip them for parsing
+                let num = parseFloat(v.replace(/,/g, '').replace(/(Cr|Dr|Dt)/yi, ''));
+                return num;
             };
 
-            // STRICT RULE: The LAST number is Balance. The SECOND LAST is Amount.
-            // This ignores any ghost numbers appearing earlier in the block.
+            // STRICT RULE: Last number is Balance. Second Last is Amount.
             const rawAmount = allNumbers[allNumbers.length - 2];
             const rawBalance = allNumbers[allNumbers.length - 1];
             
             let amount = cleanNum(rawAmount);
             const balance = cleanNum(rawBalance);
 
-            // 5. ORPHAN SCRUBBER (Solves "Values in Description")
-            // Description is everything before the Amount.
-            let description = dataBlock.split(rawAmount)[0].trim();
-
-            // The Broom: Remove stray digits/dots from the START of the description
-            // e.g. "7.50 15.28 Netflix" -> "Netflix"
-            description = description.replace(/^[\d\s\.,]+/, '').trim();
+            // 4. DESCRIPTION LOGIC (The "Sandwich" Fix)
+            // Description = (Buffer from previous block) + (Text before Amount in current block)
+            const textBeforeAmount = dataBlock.split(rawAmount)[0].trim();
             
-            // Remove bank codes
+            // Text AFTER balance? This belongs to the NEXT transaction (Buffer)
+            const textAfterBalance = dataBlock.split(rawBalance)[1] || "";
+            
+            // Construct full description
+            let description = (descriptionBuffer + " " + textBeforeAmount).trim();
+            
+            // Update Buffer for NEXT loop
+            descriptionBuffer = textAfterBalance.trim();
+
+            // CLEANUP: Orphan Scrubber
+            // Remove stray digits/dots from start of description
+            description = description.replace(/^[\d\s\.,]+/, '').trim();
             description = description.replace(/^(Kt|Dt|Dr|Cr)\s+/, '').trim();
+            // Remove # hashtags often found in FNB descriptions
+            description = description.replace(/^#/, '').trim();
+
+            // 5. DEBIT / CREDIT LOGIC (Standardized)
+            // Check Explicit Indicators on the Amount String first
+            const isCredit = rawAmount.toLowerCase().includes("cr") || rawAmount.toLowerCase().includes("kt");
+            const isDebit = rawAmount.toLowerCase().includes("dr") || rawAmount.toLowerCase().includes("dt");
+
+            if (isCredit) {
+                amount = Math.abs(amount); // Income (Green)
+            } else if (isDebit || rawAmount.includes('-')) {
+                amount = -Math.abs(amount); // Expense (Red)
+            } else {
+                // FNB Standard: No indicator usually means Debit (Expense)
+                // Unless text explicitly says "Transfer From" or "Deposit"
+                if (description.toLowerCase().includes("transfer from") || description.toLowerCase().includes("deposit")) {
+                    amount = Math.abs(amount);
+                } else {
+                    amount = -Math.abs(amount);
+                }
+            }
 
             // 6. DATE FORMATTING
             let formattedDate = potentialDate;
@@ -97,7 +120,6 @@ export const parseFnb = (text) => {
                 const monthStr3 = monthStr.toLowerCase().substring(0,3);
                 const month = monthMap[monthStr3] || "01";
                 
-                // Rollback Year Logic
                 const stmtYear = statementDate.getFullYear();
                 const stmtMonth = statementDate.getMonth() + 1;
                 const transMonthInt = parseInt(month);
@@ -110,21 +132,6 @@ export const parseFnb = (text) => {
                 formattedDate = `${p[2]}/${p[1]}/${p[0]}`;
             }
 
-            // 7. SIGN CORRECTION
-            const textAfterAmount = dataBlock.split(rawAmount)[1] || "";
-            if (rawAmount.includes('-')) {
-                amount = -Math.abs(amount);
-            } else if (textAfterAmount.toLowerCase().includes("dt")) {
-                amount = -Math.abs(amount);
-            } else if (textAfterAmount.toLowerCase().includes("kt")) {
-                amount = Math.abs(amount);
-            } else {
-                const debitKeywords = ["purchase", "fee", "payment", "debit", "withdrawal", "tikkie", "uber", "netflix", "checkers"];
-                if (debitKeywords.some(k => description.toLowerCase().includes(k))) {
-                    amount = -Math.abs(amount);
-                }
-            }
-
             transactions.push({
                 date: formattedDate,
                 description: description.trim(),
@@ -135,8 +142,13 @@ export const parseFnb = (text) => {
                 uniqueDocNo: "Check Header",
                 bankName: "FNB"
             });
+        } else {
+            // No numbers found in this block? 
+            // The entire text might be part of the NEXT transaction's description (Buffer)
+            // e.g. Block is just "FNB App Transfer From" and Date is in next block.
+            descriptionBuffer = (descriptionBuffer + " " + dataBlock).trim();
         }
-        i++; // Move to next block
+        i++; 
     }
   }
 
