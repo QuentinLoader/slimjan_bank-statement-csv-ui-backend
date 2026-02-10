@@ -62,9 +62,49 @@ export const parseFnb = (text) => {
     
     if (validAmounts.length < 2) continue;
     
-    // Last two valid amounts are: amount, balance
-    const amountMatch = validAmounts[validAmounts.length - 2];
-    const balanceMatch = validAmounts[validAmounts.length - 1];
+    // FNB FORMAT: Description Amount(Cr?) Balance(Cr?) [BankCharges?]
+    // Strategy:
+    // - If we have 2 amounts: amount, balance
+    // - If we have 3 amounts: amount, balance, bank_charges
+    // - If we have 4+ amounts: likely has amounts in description, take last 2-3
+    
+    let amountMatch, balanceMatch, bankChargesMatch;
+    
+    if (validAmounts.length === 2) {
+      amountMatch = validAmounts[0];
+      balanceMatch = validAmounts[1];
+    } else if (validAmounts.length === 3) {
+      // Check if last amount is small (< 50) and has no Cr marker = likely bank charges
+      const lastAmount = validAmounts[2];
+      const lastValue = parseFloat(lastAmount[1].replace(/,/g, ''));
+      
+      if (lastValue < 50 && !lastAmount[2]) {
+        // Pattern: amount, balance, bank_charges
+        amountMatch = validAmounts[0];
+        balanceMatch = validAmounts[1];
+        bankChargesMatch = validAmounts[2];
+      } else {
+        // Pattern: (amount in description), amount, balance
+        amountMatch = validAmounts[1];
+        balanceMatch = validAmounts[2];
+      }
+    } else {
+      // 4+ amounts: likely has amounts in description
+      // Check last amount for bank charges
+      const lastAmount = validAmounts[validAmounts.length - 1];
+      const lastValue = parseFloat(lastAmount[1].replace(/,/g, ''));
+      
+      if (lastValue < 50 && !lastAmount[2]) {
+        // Has bank charges: take 3rd-to-last as amount, 2nd-to-last as balance
+        amountMatch = validAmounts[validAmounts.length - 3];
+        balanceMatch = validAmounts[validAmounts.length - 2];
+        bankChargesMatch = validAmounts[validAmounts.length - 1];
+      } else {
+        // No bank charges: take last 2
+        amountMatch = validAmounts[validAmounts.length - 2];
+        balanceMatch = validAmounts[validAmounts.length - 1];
+      }
+    }
     
     // Extract description (everything before the amount)
     const descEnd = dataBlock.indexOf(amountMatch[0]);
