@@ -16,23 +16,19 @@ export const parseFnb = (text) => {
   if (yearMatch) statementYear = parseInt(yearMatch[1]);
 
   // 2. FIND TRANSACTION SECTION
-  // Look for "Transactions in RAND" and stop at "Closing Balance"
   const transStartMatch = text.match(/Transactions in RAND.*?(?:Date.*?Description.*?Amount.*?Balance|$)/is);
   if (!transStartMatch) {
-    console.warn("Transaction section not found");
     return transactions;
   }
 
   let transSection = text.substring(transStartMatch.index + transStartMatch[0].length);
   
-  // Stop at "Closing Balance" - but be careful not to include it
   const closingMatch = transSection.match(/Closing Balance/i);
   if (closingMatch) {
     transSection = transSection.substring(0, closingMatch.index);
   }
 
   // 3. SPLIT BY DATES THEN PARSE EACH BLOCK
-  // Split the continuous text by date markers
   const dateSplitRegex = /(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))/gi;
   const parts = transSection.split(dateSplitRegex);
   
@@ -84,40 +80,24 @@ export const parseFnb = (text) => {
     });
   }
   
-  // Now process all matches
-  for (const match of matches) {
-    const { dateStr, amountStr, amountCr, balanceStr, balanceCr } = match;
-    let { description } = match;
-
-  
-  // Now process all matches
+  // 4. PROCESS MATCHES
   for (const match of matches) {
     const { dateStr, amountStr, amountCr, balanceStr, balanceCr } = match;
     let { description } = match;
 
     // Clean description
     description = description.trim();
-    
-    // Remove trailing numbers (reference codes and amounts that leaked in)
-    // Keep only text description
     description = description.replace(/[\d\s,\.]+(?:Cr)?$/i, '').trim();
-    
-    // Remove excess whitespace
     description = description.replace(/\s+/g, ' ').trim();
-    
-    // Remove leading numbers
     description = description.replace(/^[\d\s,\.;:]+/, '').trim();
 
-    // Skip if description is too short
     if (description.length < 3) continue;
 
     // Parse amount
     let amount = parseFloat(amountStr.replace(/,/g, ''));
     
-    // Sanity check: amount shouldn't be absurdly large (indicates parsing error)
     if (amount > 1000000000) continue;
     
-    // Credit = positive, Debit = negative
     if (amountCr === 'Cr') {
       amount = Math.abs(amount);
     } else {
@@ -127,7 +107,6 @@ export const parseFnb = (text) => {
     // Parse balance
     const balance = parseFloat(balanceStr.replace(/,/g, ''));
     
-    // Sanity check on balance
     if (balance > 1000000000) continue;
 
     // Format date
