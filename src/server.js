@@ -46,17 +46,23 @@ app.post("/parse", upload.any(), async (req, res) => {
         // --- SMART UNWRAP LOGIC ---
         let rawTransactions = [];
         let statementMetadata = {}; 
+        let detectedBankName = "FNB"; // Default
+        let detectedBankLogo = "fnb";
 
-        // Scenario A: The perfect format { metadata, transactions: [] }
+        // Scenario A: The perfect format { metadata, transactions: [], bankName: "..." }
         if (result.transactions && Array.isArray(result.transactions)) {
           rawTransactions = result.transactions;
           statementMetadata = result.metadata || {};
+          // Capture the bank detected by parseStatement
+          if (result.bankName) detectedBankName = result.bankName;
+          if (result.bankLogo) detectedBankLogo = result.bankLogo;
         } 
         // Scenario B: The "Nesting Doll" Bug (Service wrapped our Object inside 'transactions')
         else if (result.transactions && result.transactions.transactions && Array.isArray(result.transactions.transactions)) {
           console.log("🔧 Fixing double-nested transactions from middleware...");
           rawTransactions = result.transactions.transactions;
           statementMetadata = result.transactions.metadata || {};
+          if (result.bankName) detectedBankName = result.bankName;
         }
         // Scenario C: Legacy Array [ ... ]
         else if (Array.isArray(result)) {
@@ -64,18 +70,18 @@ app.post("/parse", upload.any(), async (req, res) => {
         } 
         else {
           console.warn(`⚠️ Warning: Parser returned unexpected format for ${file.originalname}`);
-          console.log("Debug dump:", JSON.stringify(result).substring(0, 200)); // Log for debugging
+          console.log("Debug dump:", JSON.stringify(result).substring(0, 200)); 
           continue; // Skip this file
         }
 
-        console.log(`📊 Extracted ${rawTransactions.length} items (Balance: ${statementMetadata.openingBalance || '?'} -> ${statementMetadata.closingBalance || '?'})`);
+        console.log(`📊 Extracted ${rawTransactions.length} items from ${detectedBankName} (Balance: ${statementMetadata.openingBalance || '?'} -> ${statementMetadata.closingBalance || '?'})`);
 
         // --- STANDARDIZE & INJECT METADATA ---
         const standardized = rawTransactions.map(t => ({
           ...t,
-          // Standard Fields
-          bankName: t.bankName || "FNB", 
-          bankLogo: t.bankLogo || "fnb",
+          // Standard Fields - Use the DETECTED bank name, not hardcoded FNB
+          bankName: t.bankName || detectedBankName, 
+          bankLogo: t.bankLogo || detectedBankLogo,
           sourceFile: file.originalname,
           
           // RECONCILIATION DATA
