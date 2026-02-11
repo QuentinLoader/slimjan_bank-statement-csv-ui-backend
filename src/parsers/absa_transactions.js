@@ -1,38 +1,38 @@
 /**
- * ABSA Parser (Surgical De-Mashed & Reconciled)
- * * Fixed Specific Issues:
- * 1. Merged Financials: Splits "5.5078.20" -> "5.50" and "78.20".
- * 2. Header/Footer Leak: Removes "Cheque account statement", "Return address", etc.
- * 3. Mashed Text/Numbers: Injects spaces between Text-Numbers and Number-Numbers.
+ * ABSA Parser (Fixed for Single-Digit Dates)
+ * * Improvements:
+ * 1. Date Regex: Now accepts "2/01/2026" (Single digit day).
+ * 2. Segmentation: Correctly splits the "Super-Row" into individual transactions.
+ * 3. Footer Filtering: Ignores "STANDARD - REFER TO BRANCH" garbage.
  */
 
 export const parseAbsa = (text) => {
   const transactions = [];
 
   // ===========================================================================
-  // 1. SURGICAL TEXT CLEANUP (The Fix)
+  // 1. SURGICAL TEXT CLEANUP
   // ===========================================================================
   let cleanText = text
     .replace(/\r\n/g, '\n')
-    // Remove known Footers/Headers that pollute descriptions
-    .replace(/Cheque account statement.*?(\d{2}\/\d{2}\/\d{4}|$)/gis, '$1') // Remove header block
-    .replace(/Return address:.*?(?=\d{2}\/\d{2}\/\d{4})/gis, ' ') 
+    // Remove specific Headers/Footers
+    .replace(/Cheque account statement.*?(\d{1,2}\/\d{2}\/\d{4}|$)/gis, '$1') 
+    .replace(/Return address:.*?(?=\d{1,2}\/\d{2}\/\d{4})/gis, ' ') 
     .replace(/Our Privacy Notice.*?version\./gi, ' ')
     .replace(/Page \d+ of \d+/gi, ' ')
     .replace(/ABSA Bank Limited/gi, ' ')
-    .replace(/Authorised Financial Services/gi, ' ');
+    .replace(/Authorised Financial Services/gi, ' ')
+    .replace(/STANDARD - REFER TO BRANCH.*?TS&CS APPLY\./gis, ' '); // Remove the big footer
 
   // FIX MERGED NUMBERS (e.g. "5.5078.20" -> "5.50 78.20")
-  // Strategy: Look for .XX followed immediately by a digit
   cleanText = cleanText.replace(/(\.\d{2})([0-9])/g, '$1 $2');
 
-  // FIX TEXT-NUMBER MERGES (e.g. "FeeHeadoffice" -> "Fee Headoffice", "Headoffice*5.50")
+  // FIX TEXT-NUMBER MERGES
   cleanText = cleanText
-    .replace(/([a-z])([A-Z])/g, '$1 $2') // CamelCase split
-    .replace(/([a-zA-Z])([0-9])/g, '$1 $2') // Text-Number split
-    .replace(/([0-9])([a-zA-Z])/g, '$1 $2') // Number-Text split
-    .replace(/\*/g, ' * ') // Isolate asterisks
-    .replace(/\s+/g, ' '); // Normalize spaces
+    .replace(/([a-z])([A-Z])/g, '$1 $2') 
+    .replace(/([a-zA-Z])([0-9])/g, '$1 $2') 
+    .replace(/([0-9])([a-zA-Z])/g, '$1 $2') 
+    .replace(/\*/g, ' * ') 
+    .replace(/\s+/g, ' '); 
 
   // ===========================================================================
   // 2. HELPER: NUMBER PARSER
@@ -53,55 +53,51 @@ export const parseAbsa = (text) => {
   const accountMatch = text.match(/Account\D*?([\d-]{10,})/i) || text.match(/(\d{2}-\d{4}-\d{4})/);
   let account = accountMatch ? accountMatch[1].replace(/-/g, '') : "Unknown";
 
-  // Opening Balance
   let openingBalance = 0;
   const openMatch = cleanText.match(/Balance Brought Forward.*?([0-9\s]+,[0-9]{2}-?)/i);
   if (openMatch) openingBalance = parseAbsaNum(openMatch[1]);
 
-  // Closing Balance
   let closingBalance = 0;
   const closeMatch = cleanText.match(/Charges.*?Balance\s*([0-9\s]+,[0-9]{2}-?)/i);
   if (closeMatch) closingBalance = parseAbsaNum(closeMatch[1]);
 
   // ===========================================================================
-  // 4. PARSING LOGIC (Date-Split)
+  // 4. PARSING LOGIC (Fixed Split)
   // ===========================================================================
-  // Split by Date Pattern (DD/MM/YYYY)
-  const chunks = cleanText.split(/(?=\d{2}\/\d{2}\/\d{4})/);
+  // FIX: Allow 1 or 2 digits for day: (?=\d{1,2}\/\d{2}\/\d{4})
+  const chunks = cleanText.split(/(?=\d{1,2}\/\d{2}\/\d{4})/);
 
   let runningBalance = openingBalance;
 
   chunks.forEach(chunk => {
-    // 1. Validate Date
-    const dateMatch = chunk.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    // 1. Validate Date (1 or 2 digits)
+    const dateMatch = chunk.match(/^(\d{1,2})\/(\d{2})\/(\d{4})/);
     if (!dateMatch) return; 
 
-    const dateStr = `${dateMatch[1]}/${dateMatch[2]}/${dateMatch[3]}`;
-    let rawContent = chunk.substring(10).trim();
+    // Pad day with 0 if single digit (2 -> 02)
+    const day = dateMatch[1].padStart(2, '0');
+    const dateStr = `${day}/${dateMatch[2]}/${dateMatch[3]}`;
+    
+    let rawContent = chunk.substring(dateMatch[0].length).trim();
 
     if (rawContent.toLowerCase().includes("balance brought forward")) return;
 
     // 2. SCAVENGE NUMBERS
-    // Find numbers: 1 200,50 or 50.00 or 60.00-
-    // We updated cleanText to space them out, so simple regex works
     const numRegex = /(\d{1,3}(?: \d{3})*[.,]\d{2}-?)/g;
     const numbersFound = rawContent.match(numRegex);
 
     if (!numbersFound || numbersFound.length === 0) return;
 
     // 3. IDENTIFY BALANCE & AMOUNT
-    // Last number is Balance
     const candidateBalanceStr = numbersFound[numbersFound.length - 1];
     const currentBalance = parseAbsaNum(candidateBalanceStr);
 
-    // Calculate Amount
     const mathDiff = currentBalance - runningBalance;
     const mathAbs = Math.abs(mathDiff);
 
     let finalAmount = 0;
     let amountStrFound = null;
 
-    // Search for Amount in previous numbers
     const potentialAmounts = numbersFound.slice(0, -1);
     
     if (potentialAmounts.length > 0) {
@@ -110,29 +106,30 @@ export const parseAbsa = (text) => {
         });
 
         if (matchIndex !== -1) {
-            finalAmount = mathDiff; // Trust Math for sign
+            finalAmount = mathDiff; 
             amountStrFound = potentialAmounts[matchIndex];
         } else {
-            // Fallback: Use math difference
             finalAmount = mathDiff;
         }
     } else {
-        // Only one number? If mathDiff is significant, assume it's valid
         if (mathAbs > 0.01) finalAmount = mathDiff;
-        else return; // Skip 0.00 filler
+        else return; 
     }
 
     // 4. DESCRIPTION CLEANUP
     let description = rawContent.replace(candidateBalanceStr, '');
     if (amountStrFound) description = description.replace(amountStrFound, '');
-    else description = description.replace(numRegex, ''); // Remove all numbers if not specific
+    else description = description.replace(numRegex, ''); 
 
     description = description
         .replace(/Settlement/gi, '')
-        .replace(/^[\d\-\.,\s*]+/, '') // Remove leading junk
+        .replace(/^[\d\-\.,\s*]+/, '') 
+        .replace(/^\)\s*/, '') // Remove loose closing parenthesis from splits
         .trim();
 
-    // Update Tracker
+    // Ignore garbage rows that slipped through
+    if (description.startsWith("STANDARD - REFER TO BRANCH")) return;
+
     runningBalance = currentBalance;
 
     transactions.push({
