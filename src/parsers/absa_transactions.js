@@ -1,42 +1,18 @@
 /**
- * ABSA Parser (Fixed for Single-Digit Dates)
- * * Improvements:
- * 1. Date Regex: Now accepts "2/01/2026" (Single digit day).
- * 2. Segmentation: Correctly splits the "Super-Row" into individual transactions.
- * 3. Footer Filtering: Ignores "STANDARD - REFER TO BRANCH" garbage.
+ * ABSA Parser (Surgical & Context-Aware)
+ * Fixes: 12/01/2026 being read as 02/01/2026, and merged reference numbers.
  */
 
 export const parseAbsa = (text) => {
   const transactions = [];
 
-  // ===========================================================================
-  // 1. SURGICAL TEXT CLEANUP
-  // ===========================================================================
+  // 1. Pre-process: Separate text from numbers to prevent "Forward0,00"
   let cleanText = text
-    .replace(/\r\n/g, '\n')
-    // Remove specific Headers/Footers
-    .replace(/Cheque account statement.*?(\d{1,2}\/\d{2}\/\d{4}|$)/gis, '$1') 
-    .replace(/Return address:.*?(?=\d{1,2}\/\d{2}\/\d{4})/gis, ' ') 
-    .replace(/Our Privacy Notice.*?version\./gi, ' ')
-    .replace(/Page \d+ of \d+/gi, ' ')
-    .replace(/ABSA Bank Limited/gi, ' ')
-    .replace(/Authorised Financial Services/gi, ' ')
-    .replace(/STANDARD - REFER TO BRANCH.*?TS&CS APPLY\./gis, ' '); // Remove the big footer
+    .replace(/([a-zA-Z])([0-9])/g, '$1 $2')
+    .replace(/([0-9])([a-zA-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ');
 
-  // FIX MERGED NUMBERS (e.g. "5.5078.20" -> "5.50 78.20")
-  cleanText = cleanText.replace(/(\.\d{2})([0-9])/g, '$1 $2');
-
-  // FIX TEXT-NUMBER MERGES
-  cleanText = cleanText
-    .replace(/([a-z])([A-Z])/g, '$1 $2') 
-    .replace(/([a-zA-Z])([0-9])/g, '$1 $2') 
-    .replace(/([0-9])([a-zA-Z])/g, '$1 $2') 
-    .replace(/\*/g, ' * ') 
-    .replace(/\s+/g, ' '); 
-
-  // ===========================================================================
-  // 2. HELPER: NUMBER PARSER
-  // ===========================================================================
+  // 2. Helper: Number Parser
   const parseAbsaNum = (val) => {
     if (!val) return 0;
     let clean = val.trim();
@@ -47,9 +23,7 @@ export const parseAbsa = (text) => {
     return isNegative ? -Math.abs(num) : num;
   };
 
-  // ===========================================================================
-  // 3. METADATA EXTRACTION
-  // ===========================================================================
+  // 3. Metadata
   const accountMatch = text.match(/Account\D*?([\d-]{10,})/i) || text.match(/(\d{2}-\d{4}-\d{4})/);
   let account = accountMatch ? accountMatch[1].replace(/-/g, '') : "Unknown";
 
@@ -61,74 +35,75 @@ export const parseAbsa = (text) => {
   const closeMatch = cleanText.match(/Charges.*?Balance\s*([0-9\s]+,[0-9]{2}-?)/i);
   if (closeMatch) closingBalance = parseAbsaNum(closeMatch[1]);
 
-  // ===========================================================================
-  // 4. PARSING LOGIC (Fixed Split)
-  // ===========================================================================
-  // FIX: Allow 1 or 2 digits for day: (?=\d{1,2}\/\d{2}\/\d{4})
+  // 4. Parsing Logic (The Split Fix)
+  // Split by Date but keep the 1-digit/2-digit flexibility
   const chunks = cleanText.split(/(?=\d{1,2}\/\d{2}\/\d{4})/);
 
   let runningBalance = openingBalance;
 
-  chunks.forEach(chunk => {
-    // 1. Validate Date (1 or 2 digits)
-    const dateMatch = chunk.match(/^(\d{1,2})\/(\d{2})\/(\d{4})/);
-    if (!dateMatch) return; 
+  chunks.forEach((chunk, index) => {
+    let dateMatch = chunk.match(/^(\d{1,2})\/(\d{2})\/(\d{4})/);
+    if (!dateMatch) return;
 
-    // Pad day with 0 if single digit (2 -> 02)
-    const day = dateMatch[1].padStart(2, '0');
-    const dateStr = `${day}/${dateMatch[2]}/${dateMatch[3]}`;
-    
-    let rawContent = chunk.substring(dateMatch[0].length).trim();
-
-    if (rawContent.toLowerCase().includes("balance brought forward")) return;
-
-    // 2. SCAVENGE NUMBERS
-    const numRegex = /(\d{1,3}(?: \d{3})*[.,]\d{2}-?)/g;
-    const numbersFound = rawContent.match(numRegex);
-
-    if (!numbersFound || numbersFound.length === 0) return;
-
-    // 3. IDENTIFY BALANCE & AMOUNT
-    const candidateBalanceStr = numbersFound[numbersFound.length - 1];
-    const currentBalance = parseAbsaNum(candidateBalanceStr);
-
-    const mathDiff = currentBalance - runningBalance;
-    const mathAbs = Math.abs(mathDiff);
-
-    let finalAmount = 0;
-    let amountStrFound = null;
-
-    const potentialAmounts = numbersFound.slice(0, -1);
-    
-    if (potentialAmounts.length > 0) {
-        const matchIndex = potentialAmounts.findIndex(numStr => {
-            return Math.abs(parseAbsaNum(numStr) - mathAbs) < 0.05;
-        });
-
-        if (matchIndex !== -1) {
-            finalAmount = mathDiff; 
-            amountStrFound = potentialAmounts[matchIndex];
-        } else {
-            finalAmount = mathDiff;
-        }
-    } else {
-        if (mathAbs > 0.01) finalAmount = mathDiff;
-        else return; 
+    let day = dateMatch[1];
+    // REPAIR MASHED 1: Check if the previous chunk ended in a '1'
+    if (index > 0 && day.length === 1) {
+       const prevChunk = chunks[index-1].trim();
+       if (prevChunk.endsWith('1')) {
+           day = '1' + day; // Re-attach the '1' from 12, 13, 14, etc.
+       }
     }
 
-    // 4. DESCRIPTION CLEANUP
-    let description = rawContent.replace(candidateBalanceStr, '');
-    if (amountStrFound) description = description.replace(amountStrFound, '');
-    else description = description.replace(numRegex, ''); 
+    const dateStr = `${day.padStart(2, '0')}/${dateMatch[2]}/${dateMatch[3]}`;
+    let rawContent = chunk.substring(dateMatch[0].length).trim();
+    
+    if (rawContent.toLowerCase().includes("balance brought forward")) return;
 
-    description = description
-        .replace(/Settlement/gi, '')
-        .replace(/^[\d\-\.,\s*]+/, '') 
-        .replace(/^\)\s*/, '') // Remove loose closing parenthesis from splits
+    // SCAVENGE NUMBERS
+    const numRegex = /(\d{1,3}(?: \d{3})*[.,]\d{2}-?)/g;
+    const allNums = rawContent.match(numRegex) || [];
+
+    if (allNums.length === 0) return;
+
+    let finalAmount = 0;
+    let currentBalance = runningBalance;
+    let matchedBalanceStr = "";
+    let matchedAmountStr = "";
+
+    // SMART SELECTION: Test pairs of numbers against the running balance
+    // ABSA usually has: [Amount] [Balance] OR [Charge] [Amount] [Balance]
+    // We work backwards from the end of the line.
+    for (let i = allNums.length - 1; i >= 0; i--) {
+        let balCandidate = parseAbsaNum(allNums[i]);
+        
+        // Check if any other number in the line makes the math work
+        for (let j = i - 1; j >= 0; j--) {
+            let amtCandidate = parseAbsaNum(allNums[j]);
+            if (Math.abs(runningBalance + amtCandidate - balCandidate) < 0.05) {
+                finalAmount = amtCandidate;
+                currentBalance = balCandidate;
+                matchedAmountStr = allNums[j];
+                matchedBalanceStr = allNums[i];
+                break;
+            }
+        }
+        if (matchedBalanceStr) break;
+    }
+
+    // FALLBACK: If math check fails, take the last number as balance
+    if (!matchedBalanceStr) {
+        currentBalance = parseAbsaNum(allNums[allNums.length - 1]);
+        finalAmount = currentBalance - runningBalance;
+    }
+
+    // Description Cleanup
+    let description = rawContent
+        .replace(matchedBalanceStr, '')
+        .replace(matchedAmountStr, '')
+        .replace(numRegex, '')
+        .replace(/^\)\s*/, '')
+        .replace(/\s+/g, ' ')
         .trim();
-
-    // Ignore garbage rows that slipped through
-    if (description.startsWith("STANDARD - REFER TO BRANCH")) return;
 
     runningBalance = currentBalance;
 
@@ -144,13 +119,7 @@ export const parseAbsa = (text) => {
   });
 
   return {
-    metadata: {
-      accountNumber: account,
-      openingBalance: openingBalance,
-      closingBalance: closingBalance,
-      transactionCount: transactions.length,
-      bankName: "ABSA"
-    },
-    transactions: transactions
+    metadata: { accountNumber: account, openingBalance, closingBalance, bankName: "ABSA" },
+    transactions
   };
 };
