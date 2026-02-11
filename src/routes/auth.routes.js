@@ -10,8 +10,9 @@ router.post("/register", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password)
+    if (!email || !password) {
       return res.status(400).json({ message: "Missing email or password" });
+    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -29,8 +30,13 @@ router.post("/register", async (req, res) => {
     res.json({ token });
 
   } catch (err) {
-    console.error(err.message);
-    res.status(400).json({ message: "Email may already exist" });
+    // 🔥 THIS IS THE IMPORTANT FIX
+    console.error("REGISTER ERROR FULL OBJECT:", err);
+    res.status(500).json({
+      error: err.message,
+      detail: err.detail || null,
+      code: err.code || null
+    });
   }
 });
 
@@ -63,7 +69,8 @@ router.post("/login", async (req, res) => {
     res.json({ token });
 
   } catch (err) {
-    res.status(500).json({ message: "Login failed" });
+    console.error("LOGIN ERROR:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
