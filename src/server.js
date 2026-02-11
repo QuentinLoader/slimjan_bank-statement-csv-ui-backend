@@ -1,3 +1,6 @@
+console.log("🔥 SERVER FILE VERSION: 11 Feb 21:10");
+console.log("DATABASE_URL exists:", !!process.env.DATABASE_URL);
+
 import dotenv from "dotenv";
 dotenv.config();
 import express from "express";
