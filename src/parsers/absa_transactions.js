@@ -1,15 +1,17 @@
 /**
- * ABSA Parser (Surgical & Context-Aware)
- * Fixes: 12/01/2026 being read as 02/01/2026, and merged reference numbers.
+ * ABSA Parser (Surgical Footer Control)
+ * Fixes: 12/01/2026 description leak & mashed numbers.
  */
 
 export const parseAbsa = (text) => {
   const transactions = [];
 
-  // 1. Pre-process: Separate text from numbers to prevent "Forward0,00"
+  // 1. Pre-process: Isolate dates and numbers
   let cleanText = text
     .replace(/([a-zA-Z])([0-9])/g, '$1 $2')
     .replace(/([0-9])([a-zA-Z])/g, '$1 $2')
+    // Fix merged amount/balance like 5.5078.20
+    .replace(/(\.\d{2})([0-9])/g, '$1 $2')
     .replace(/\s+/g, ' ');
 
   // 2. Helper: Number Parser
@@ -19,8 +21,7 @@ export const parseAbsa = (text) => {
     let isNegative = clean.endsWith('-');
     if (isNegative) clean = clean.substring(0, clean.length - 1);
     clean = clean.replace(/[^0-9,.-]/g, '').replace(',', '.');
-    let num = parseFloat(clean);
-    return isNegative ? -Math.abs(num) : num;
+    return isNegative ? -Math.abs(parseFloat(clean)) : parseFloat(clean);
   };
 
   // 3. Metadata
@@ -35,10 +36,8 @@ export const parseAbsa = (text) => {
   const closeMatch = cleanText.match(/Charges.*?Balance\s*([0-9\s]+,[0-9]{2}-?)/i);
   if (closeMatch) closingBalance = parseAbsaNum(closeMatch[1]);
 
-  // 4. Parsing Logic (The Split Fix)
-  // Split by Date but keep the 1-digit/2-digit flexibility
+  // 4. Parsing Logic (The Split)
   const chunks = cleanText.split(/(?=\d{1,2}\/\d{2}\/\d{4})/);
-
   let runningBalance = openingBalance;
 
   chunks.forEach((chunk, index) => {
@@ -46,12 +45,9 @@ export const parseAbsa = (text) => {
     if (!dateMatch) return;
 
     let day = dateMatch[1];
-    // REPAIR MASHED 1: Check if the previous chunk ended in a '1'
-    if (index > 0 && day.length === 1) {
-       const prevChunk = chunks[index-1].trim();
-       if (prevChunk.endsWith('1')) {
-           day = '1' + day; // Re-attach the '1' from 12, 13, 14, etc.
-       }
+    // Repair 12/01/2026 split issue
+    if (index > 0 && day.length === 1 && chunks[index-1].trim().endsWith('1')) {
+        day = '1' + day;
     }
 
     const dateStr = `${day.padStart(2, '0')}/${dateMatch[2]}/${dateMatch[3]}`;
@@ -59,10 +55,9 @@ export const parseAbsa = (text) => {
     
     if (rawContent.toLowerCase().includes("balance brought forward")) return;
 
-    // SCAVENGE NUMBERS
+    // Scavenge Numbers
     const numRegex = /(\d{1,3}(?: \d{3})*[.,]\d{2}-?)/g;
     const allNums = rawContent.match(numRegex) || [];
-
     if (allNums.length === 0) return;
 
     let finalAmount = 0;
@@ -70,13 +65,9 @@ export const parseAbsa = (text) => {
     let matchedBalanceStr = "";
     let matchedAmountStr = "";
 
-    // SMART SELECTION: Test pairs of numbers against the running balance
-    // ABSA usually has: [Amount] [Balance] OR [Charge] [Amount] [Balance]
-    // We work backwards from the end of the line.
+    // Math check for Balance vs Amount
     for (let i = allNums.length - 1; i >= 0; i--) {
         let balCandidate = parseAbsaNum(allNums[i]);
-        
-        // Check if any other number in the line makes the math work
         for (let j = i - 1; j >= 0; j--) {
             let amtCandidate = parseAbsaNum(allNums[j]);
             if (Math.abs(runningBalance + amtCandidate - balCandidate) < 0.05) {
@@ -90,19 +81,34 @@ export const parseAbsa = (text) => {
         if (matchedBalanceStr) break;
     }
 
-    // FALLBACK: If math check fails, take the last number as balance
     if (!matchedBalanceStr) {
         currentBalance = parseAbsaNum(allNums[allNums.length - 1]);
         finalAmount = currentBalance - runningBalance;
     }
 
-    // Description Cleanup
+    // 5. FOOTER CONTROL: Stop the description from leaking
+    const stopWords = [
+      "Cheque account statement", "Return address", "Our Privacy Notice", 
+      "Account Type", "Issued on", "Statement no", "Client VAT", 
+      "Balance Overdraft", "Page 1", "Registration Number"
+    ];
+
     let description = rawContent
         .replace(matchedBalanceStr, '')
         .replace(matchedAmountStr, '')
-        .replace(numRegex, '')
-        .replace(/^\)\s*/, '')
+        .replace(numRegex, '');
+
+    // Cut off description at first stop word
+    stopWords.forEach(word => {
+      const stopIndex = description.indexOf(word);
+      if (stopIndex !== -1) {
+        description = description.substring(0, stopIndex);
+      }
+    });
+
+    description = description
         .replace(/\s+/g, ' ')
+        .replace(/^\W+/, '') // Remove leading symbols
         .trim();
 
     runningBalance = currentBalance;
