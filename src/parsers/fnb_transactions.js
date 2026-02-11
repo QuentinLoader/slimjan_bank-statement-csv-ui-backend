@@ -1,3 +1,18 @@
+/**
+ * Each transaction object should include:
+ * {
+ *   "date": "01/02/2025",          // DD/MM/YYYY
+ *   "description": "...",
+ *   "amount": -150.00,             // negative for debits, positive for credits
+ *   "balance": 6833.61,            // running balance after this transaction
+ *   "account": "62854836693",      // account number
+ *   "bankName": "FNB",
+ *   "bankLogo": "fnb",
+ *   "clientName": "...",
+ *   "uniqueDocNo": "ST-12345",     // statement ID (not "Check Header")
+ * }
+ */
+
 export const parseFnb = (text) => {
   const transactions = [];
 
@@ -48,11 +63,6 @@ export const parseFnb = (text) => {
     if (allAmounts.length < 2) continue;
     
     // ENHANCED FILTERING
-    // Reference numbers typically:
-    // - Are 10+ digits with no commas
-    // - Appear in the middle of text (not at boundaries)
-    // - Don't have Cr suffix
-    
     const validAmounts = [];
     
     for (let j = 0; j < allAmounts.length; j++) {
@@ -64,21 +74,17 @@ export const parseFnb = (text) => {
       // Reject obvious reference numbers
       if (num > 100000000) continue; // > 100 million
       
-      // If it's a large number without commas and no Cr, it's likely a reference
       if (num >= 10000 && !match[1].includes(',') && !hasCr) continue;
       
       // Special case: phone numbers (10 digits, starts with 0)
       if (numStr.length === 12 && numStr.startsWith('0') && !match[1].includes(',')) continue;
       
-      // Check context: is this amount surrounded by text (likely ref number)?
       const beforeIndex = match.index;
       const afterIndex = match.index + match[0].length;
       const charBefore = beforeIndex > 0 ? dataBlock[beforeIndex - 1] : ' ';
       const charAfter = afterIndex < dataBlock.length ? dataBlock[afterIndex] : ' ';
       
-      // If surrounded by letters/numbers on both sides, likely embedded reference
       if (/[a-zA-Z0-9]/.test(charBefore) && /[a-zA-Z0-9]/.test(charAfter)) {
-        // Unless it has Cr suffix (then it's a valid amount)
         if (!hasCr) continue;
       }
       
@@ -87,19 +93,15 @@ export const parseFnb = (text) => {
     
     if (validAmounts.length < 2) continue;
     
-    // Determine which are amount and balance
     let amountMatch, balanceMatch;
     
-    // Check if last amount is small (<50) without Cr = bank charges
     const lastAmt = validAmounts[validAmounts.length - 1];
     const lastVal = parseFloat(lastAmt[1].replace(/,/g, ''));
     
     if (validAmounts.length >= 3 && lastVal < 50 && !lastAmt[2]) {
-      // Format: ... amount balance bankCharges
       amountMatch = validAmounts[validAmounts.length - 3];
       balanceMatch = validAmounts[validAmounts.length - 2];
     } else {
-      // Format: ... amount balance
       amountMatch = validAmounts[validAmounts.length - 2];
       balanceMatch = validAmounts[validAmounts.length - 1];
     }
@@ -108,7 +110,6 @@ export const parseFnb = (text) => {
     const descEnd = dataBlock.indexOf(amountMatch[0]);
     let description = dataBlock.substring(0, descEnd).trim();
     
-    // Clean description
     description = description.replace(/\s+/g, ' ').trim();
     description = description.replace(/^[\d\s,\.;:]+/, '').trim();
     
@@ -144,9 +145,10 @@ export const parseFnb = (text) => {
       amount: amount,
       balance: balance,
       account: account,
+      bankName: "FNB",
+      bankLogo: "fnb",
       clientName: clientName,
-      uniqueDocNo: statementId,
-      bankName: "FNB"
+      uniqueDocNo: statementId     // using BBST##### format from statement
     });
   }
 
