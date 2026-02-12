@@ -5,7 +5,10 @@ export const checkPlanAccess = async (req, res, next) => {
     const userId = req.user.userId;
 
     const result = await pool.query(
-      "SELECT * FROM users WHERE id = $1",
+      `SELECT id, email, plan, credits_remaining, 
+              subscription_expires_at, is_verified
+       FROM users
+       WHERE id = $1`,
       [userId]
     );
 
@@ -15,29 +18,54 @@ export const checkPlanAccess = async (req, res, next) => {
       return res.status(404).json({ message: "User not found" });
     }
 
+    // 🔐 Email verification enforcement
+    if (!user.is_verified) {
+      return res.status(403).json({ message: "Email not verified" });
+    }
+
+    // Defensive: Ensure plan is defined
+    if (!user.plan) {
+      return res.status(403).json({ message: "Invalid account configuration" });
+    }
+
     req.userRecord = user;
 
-    // PRO PLAN → unlimited if active
+    /* ============================
+       PRO PLAN → Unlimited Access
+    ============================= */
     if (user.plan === "pro") {
+
       if (
         user.subscription_expires_at &&
         new Date(user.subscription_expires_at) > new Date()
       ) {
         return next();
-      } else {
-        return res.status(403).json({ message: "Subscription expired" });
       }
+
+      return res.status(403).json({ message: "Subscription expired" });
     }
 
-    // FREE or PAYG → check credits only (do NOT deduct yet)
-    if (user.credits_remaining <= 0) {
-      return res.status(403).json({ message: "No credits remaining" });
+    /* ============================
+       FREE or PAY-AS-YOU-GO
+    ============================= */
+
+    if (user.plan === "free" || user.plan === "pay-as-you-go") {
+
+      if (
+        typeof user.credits_remaining !== "number" ||
+        user.credits_remaining <= 0
+      ) {
+        return res.status(403).json({ message: "No credits remaining" });
+      }
+
+      return next();
     }
 
-    next();
+    // Unknown plan type
+    return res.status(403).json({ message: "Invalid plan type" });
 
   } catch (err) {
-    console.error("PLAN CHECK ERROR:", err);
-    res.status(500).json({ message: "Plan check failed" });
+    console.error("PLAN CHECK ERROR");
+    return res.status(500).json({ message: "Plan check failed" });
   }
 };

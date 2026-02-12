@@ -2,12 +2,14 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-console.log("🔥 SERVER FILE VERSION: Production Hardened");
+console.log("🔥 SERVER FILE VERSION: Production Hardened + Secured");
 console.log("DATABASE_URL exists:", !!process.env.DATABASE_URL);
 
+import helmet from "helmet";
 import express from "express";
 import cors from "cors";
 import multer from "multer";
+import rateLimit from "express-rate-limit";
 import { parseStatement } from "./services/parseStatement.js";
 import pool from "./config/db.js";
 import authRoutes from "./routes/auth.routes.js";
@@ -16,6 +18,22 @@ import { authenticateUser } from "./middleware/auth.middleware.js";
 import { checkPlanAccess } from "./middleware/credits.middleware.js";
 
 const app = express();
+
+/* ============================
+   SECURITY MIDDLEWARE
+============================ */
+
+// Security headers
+app.use(helmet());
+
+// Global rate limiter (all routes)
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 mins
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+app.use(globalLimiter);
 
 /* ============================
    CORS (LOCKED TO FRONTEND)
@@ -27,16 +45,23 @@ app.use(cors({
   credentials: false
 }));
 
-app.options('*', cors());
 app.use(express.json());
 
-const upload = multer({ storage: multer.memoryStorage() });
+/* ============================
+   FILE UPLOAD LIMITS
+============================ */
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB limit
+  }
+});
 
 /* ============================
    Health Check
 ============================ */
 app.get("/", (req, res) =>
-  res.send("YouScan Engine: Production Active")
+  res.send("YouScan Engine: Secure Production Active")
 );
 
 /* ============================
@@ -45,12 +70,21 @@ app.get("/", (req, res) =>
 app.use("/auth", authRoutes);
 
 /* ============================
+   Parse Route Rate Limiter
+============================ */
+const parseLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30
+});
+
+/* ============================
    PROTECTED PARSE ROUTE
 ============================ */
 app.post(
   "/parse",
-  authenticateUser,   // 🔐 Verify JWT
-  checkPlanAccess,    // 💳 Check eligibility (NO deduction yet)
+  parseLimiter,
+  authenticateUser,
+  checkPlanAccess,
   upload.any(),
   async (req, res) => {
 
@@ -128,8 +162,9 @@ app.post(
         );
 
         await client.query(
-          "INSERT INTO usage_logs (user_id, action) VALUES ($1, $2)",
-          [user.id, "statement_upload"]
+          `INSERT INTO usage_logs (user_id, action, ip_address)
+           VALUES ($1, $2, $3)`,
+          [user.id, "statement_upload", req.ip]
         );
 
         await client.query("COMMIT");
@@ -172,7 +207,7 @@ app.post("/payments/ozow-webhook", async (req, res) => {
     res.sendStatus(200);
 
   } catch (err) {
-    console.error("OZOW WEBHOOK ERROR:", err);
+    console.error("OZOW WEBHOOK ERROR");
     res.sendStatus(500);
   }
 });
