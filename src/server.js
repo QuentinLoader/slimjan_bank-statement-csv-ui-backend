@@ -2,7 +2,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-console.log("🔥 SERVER FILE VERSION: Production Hardened + Billing Secured");
+console.log("🔥 SERVER FILE VERSION: Production Hardened + Billing Secured + Idempotent Webhook");
 console.log("DATABASE_URL exists:", !!process.env.DATABASE_URL);
 
 import helmet from "helmet";
@@ -168,10 +168,6 @@ app.post(
         allTransactions = [...allTransactions, ...standardized];
       }
 
-      /* ============================
-         CREDIT / FREE LOGIC
-      ============================= */
-
       const user = req.userRecord;
 
       await client.query("BEGIN");
@@ -212,11 +208,9 @@ app.post(
       res.json(allTransactions);
 
     } catch (error) {
-
       await client.query("ROLLBACK");
       console.error("PARSE ERROR:", error.message);
       res.status(500).json({ error: "Parsing failed" });
-
     } finally {
       client.release();
     }
@@ -224,12 +218,18 @@ app.post(
 );
 
 /* ============================
-   OZOW WEBHOOK (HARDENED)
+   OZOW WEBHOOK (HARDENED + IDEMPOTENT + SECRET)
 ============================ */
 app.post("/payments/ozow-webhook", async (req, res) => {
   const client = await pool.connect();
 
   try {
+
+    // 🔐 SECRET VALIDATION
+    if (req.query.secret !== process.env.OZOW_WEBHOOK_SECRET) {
+      return res.sendStatus(403);
+    }
+
     const {
       email,
       status,
@@ -238,11 +238,26 @@ app.post("/payments/ozow-webhook", async (req, res) => {
       external_reference
     } = req.body;
 
+    if (!email || !external_reference) {
+      return res.sendStatus(400);
+    }
+
     if (status !== "SUCCESS") {
       return res.sendStatus(200);
     }
 
     await client.query("BEGIN");
+
+    // 🛡 IDEMPOTENCY CHECK
+    const existingPayment = await client.query(
+      `SELECT id FROM payments WHERE external_reference = $1`,
+      [external_reference]
+    );
+
+    if (existingPayment.rows.length > 0) {
+      await client.query("ROLLBACK");
+      return res.sendStatus(200);
+    }
 
     const userResult = await client.query(
       `SELECT id FROM users WHERE email = $1`,
@@ -264,8 +279,8 @@ app.post("/payments/ozow-webhook", async (req, res) => {
 
       await client.query(
         `INSERT INTO payments
-         (user_id, payment_type, amount_cents, status, external_reference)
-         VALUES ($1, 'subscription', $2, 'success', $3)`,
+         (user_id, provider, payment_type, amount_cents, status, external_reference)
+         VALUES ($1, 'ozow', 'subscription', $2, 'success', $3)`,
         [user.id, amount_cents, external_reference]
       );
 
@@ -278,7 +293,7 @@ app.post("/payments/ozow-webhook", async (req, res) => {
       );
     }
 
-    // CREDIT BUNDLE 10
+    // CREDIT BUNDLE
     if (payment_type === "credit_10") {
 
       const bundle = PRICING.CREDIT_BUNDLES.CREDIT_10;
@@ -289,8 +304,8 @@ app.post("/payments/ozow-webhook", async (req, res) => {
 
       await client.query(
         `INSERT INTO payments
-         (user_id, payment_type, amount_cents, status, external_reference)
-         VALUES ($1, 'credit_bundle', $2, 'success', $3)`,
+         (user_id, provider, payment_type, amount_cents, status, external_reference)
+         VALUES ($1, 'ozow', 'credit_bundle', $2, 'success', $3)`,
         [user.id, amount_cents, external_reference]
       );
 
@@ -312,12 +327,12 @@ app.post("/payments/ozow-webhook", async (req, res) => {
 
     await client.query("COMMIT");
 
-    res.sendStatus(200);
+    return res.sendStatus(200);
 
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("OZOW WEBHOOK ERROR:", err.message);
-    res.sendStatus(500);
+    return res.sendStatus(500);
   } finally {
     client.release();
   }
