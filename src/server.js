@@ -2,7 +2,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-console.log("🔥 SERVER FILE VERSION: 12 Feb - JWT Protected");
+console.log("🔥 SERVER FILE VERSION: Production Hardened");
 console.log("DATABASE_URL exists:", !!process.env.DATABASE_URL);
 
 import express from "express";
@@ -12,38 +12,22 @@ import { parseStatement } from "./services/parseStatement.js";
 import pool from "./config/db.js";
 import authRoutes from "./routes/auth.routes.js";
 
-// ✅ NEW IMPORTS
 import { authenticateUser } from "./middleware/auth.middleware.js";
 import { checkPlanAccess } from "./middleware/credits.middleware.js";
 
 const app = express();
 
 /* ============================
-   DB DEBUG (temporary)
-============================ */
-app.get("/db-debug", async (req, res) => {
-  try {
-    const result = await pool.query(
-      "SELECT current_database(), inet_server_addr(), inet_server_port()"
-    );
-    res.json(result.rows);
-  } catch (err) {
-    console.error("DB DEBUG ERROR:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* ============================
-   CORS
+   CORS (LOCKED TO FRONTEND)
 ============================ */
 app.use(cors({
-  origin: '*', 
+  origin: process.env.FRONTEND_URL,
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: false 
+  credentials: false
 }));
 
-app.options('*', cors()); 
+app.options('*', cors());
 app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -51,8 +35,8 @@ const upload = multer({ storage: multer.memoryStorage() });
 /* ============================
    Health Check
 ============================ */
-app.get("/", (req, res) => 
-  res.send("YouScan Engine: Global Access Active")
+app.get("/", (req, res) =>
+  res.send("YouScan Engine: Production Active")
 );
 
 /* ============================
@@ -65,10 +49,13 @@ app.use("/auth", authRoutes);
 ============================ */
 app.post(
   "/parse",
-  authenticateUser,   // 🔐 Step 1: Verify JWT
-  enforceCredits,     // 💳 Step 2: Check & deduct credits
+  authenticateUser,   // 🔐 Verify JWT
+  checkPlanAccess,    // 💳 Check eligibility (NO deduction yet)
   upload.any(),
   async (req, res) => {
+
+    const client = await pool.connect();
+
     try {
       const files = req.files || [];
 
@@ -79,74 +66,114 @@ app.post(
       let allTransactions = [];
 
       for (const file of files) {
-        try {
-          const result = await parseStatement(file.buffer);
 
-          let rawTransactions = [];
-          let statementMetadata = {}; 
-          let detectedBankName = "FNB";
-          let detectedBankLogo = "fnb";
+        const result = await parseStatement(file.buffer);
 
-          if (result.transactions && Array.isArray(result.transactions)) {
-            rawTransactions = result.transactions;
-            statementMetadata = result.metadata || {};
-            if (result.bankName) detectedBankName = result.bankName;
-            if (result.bankLogo) detectedBankLogo = result.bankLogo;
-          } 
-          else if (
-            result.transactions &&
-            result.transactions.transactions &&
-            Array.isArray(result.transactions.transactions)
-          ) {
-            rawTransactions = result.transactions.transactions;
-            statementMetadata = result.transactions.metadata || {};
-            if (result.bankName) detectedBankName = result.bankName;
-          }
-          else if (Array.isArray(result)) {
-            rawTransactions = result;
-          } 
-          else {
-            continue;
-          }
-
-          const standardized = rawTransactions.map(t => ({
-            ...t,
-            bankName: t.bankName || detectedBankName,
-            bankLogo: t.bankLogo || detectedBankLogo,
-            sourceFile: file.originalname,
-            statementMetadata: {
-              openingBalance: statementMetadata.openingBalance || 0,
-              closingBalance: statementMetadata.closingBalance || 0,
-              statementId: statementMetadata.statementId || "Unknown"
-            }
-          }));
-
-          allTransactions = [...allTransactions, ...standardized];
-
-        } catch (parseError) {
-          console.error("Parse error:", parseError.message);
+        if (!result) {
+          throw new Error("Parsing failed");
         }
+
+        let rawTransactions = [];
+        let statementMetadata = {};
+        let detectedBankName = "FNB";
+        let detectedBankLogo = "fnb";
+
+        if (result.transactions && Array.isArray(result.transactions)) {
+          rawTransactions = result.transactions;
+          statementMetadata = result.metadata || {};
+          if (result.bankName) detectedBankName = result.bankName;
+          if (result.bankLogo) detectedBankLogo = result.bankLogo;
+        }
+        else if (
+          result.transactions &&
+          result.transactions.transactions &&
+          Array.isArray(result.transactions.transactions)
+        ) {
+          rawTransactions = result.transactions.transactions;
+          statementMetadata = result.transactions.metadata || {};
+          if (result.bankName) detectedBankName = result.bankName;
+        }
+        else if (Array.isArray(result)) {
+          rawTransactions = result;
+        }
+        else {
+          throw new Error("Invalid parse structure");
+        }
+
+        const standardized = rawTransactions.map(t => ({
+          ...t,
+          bankName: t.bankName || detectedBankName,
+          bankLogo: t.bankLogo || detectedBankLogo,
+          sourceFile: file.originalname,
+          statementMetadata: {
+            openingBalance: statementMetadata.openingBalance || 0,
+            closingBalance: statementMetadata.closingBalance || 0,
+            statementId: statementMetadata.statementId || "Unknown"
+          }
+        }));
+
+        allTransactions = [...allTransactions, ...standardized];
+      }
+
+      // 🟢 CREDIT DEDUCTION AFTER SUCCESS
+      const user = req.userRecord;
+
+      if (user.plan === "free" || user.plan === "pay-as-you-go") {
+
+        await client.query("BEGIN");
+
+        await client.query(
+          "UPDATE users SET credits_remaining = credits_remaining - 1 WHERE id = $1",
+          [user.id]
+        );
+
+        await client.query(
+          "INSERT INTO usage_logs (user_id, action) VALUES ($1, $2)",
+          [user.id, "statement_upload"]
+        );
+
+        await client.query("COMMIT");
       }
 
       res.json(allTransactions);
 
     } catch (error) {
-      console.error("Global Error:", error.message);
+
+      await client.query("ROLLBACK");
+
+      console.error("PARSE ERROR:", error.message);
       res.status(500).json({ error: "Parsing failed" });
+
+    } finally {
+      client.release();
     }
   }
 );
 
 /* ============================
-   Simple Auth Gate (Legacy)
+   OZOW WEBHOOK PLACEHOLDER
 ============================ */
-app.post("/verify-gate", (req, res) => {
-  const { code } = req.body;
+app.post("/payments/ozow-webhook", async (req, res) => {
+  try {
+    const { email, status, subscription_end } = req.body;
 
-  if (code === "007") {
-    res.json({ success: true, token: "youscan-access-granted" });
-  } else {
-    res.status(401).json({ success: false, message: "Invalid Access Code" });
+    if (status !== "SUCCESS") {
+      return res.sendStatus(200);
+    }
+
+    await pool.query(
+      `UPDATE users 
+       SET plan = 'pro',
+           subscription_expires_at = $1
+       WHERE email = $2`,
+      [subscription_end, email]
+    );
+
+    res.sendStatus(200);
+
+  } catch (err) {
+    console.error("OZOW WEBHOOK ERROR:", err);
+    res.sendStatus(500);
   }
 });
 
