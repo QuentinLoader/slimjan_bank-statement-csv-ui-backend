@@ -21,7 +21,6 @@ router.post("/register", async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Generate secure token
     const rawToken = crypto.randomBytes(32).toString("hex");
     const hashedToken = crypto
       .createHash("sha256")
@@ -176,6 +175,33 @@ router.post("/login", async (req, res) => {
   } catch (err) {
     console.error("LOGIN ERROR");
     res.status(500).json({ message: "Login failed" });
+  }
+});
+
+/* ============================
+   GET CURRENT USER
+============================ */
+router.get("/me", authenticateUser, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT email, plan, credits_remaining,
+              subscription_expires_at, is_verified
+       FROM users
+       WHERE id = $1`,
+      [req.user.userId]
+    );
+
+    const user = result.rows[0];
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json(user);
+
+  } catch (err) {
+    console.error("ME ERROR");
+    res.status(500).json({ message: "Failed to fetch user" });
   }
 });
 
