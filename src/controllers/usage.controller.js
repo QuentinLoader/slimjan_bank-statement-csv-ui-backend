@@ -1,7 +1,8 @@
 import pool from '../config/db.js';
+import { PRICING } from '../config/pricing.js';
 
 export async function recordExport(req, res) {
-  // 🔥 FIX: Match auth middleware (req.user contains userId)
+
   if (!req.user || !req.user.userId) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -29,11 +30,12 @@ export async function recordExport(req, res) {
 
     const user = userResult.rows[0];
 
-    /**
-     * FREE PLAN — Atomic update
+    /*
+     * FREE PLAN
      */
     if (user.plan === 'free') {
-      const FREE_LIMIT = 15;
+
+      const FREE_LIMIT = PRICING.FREE.lifetime_parses;
 
       const updateResult = await client.query(
         `UPDATE users
@@ -49,10 +51,11 @@ export async function recordExport(req, res) {
       }
     }
 
-    /**
-     * PAY-AS-YOU-GO PLAN — Atomic decrement
+    /*
+     * PAY-AS-YOU-GO
      */
     if (user.plan === 'pay-as-you-go') {
+
       const updateResult = await client.query(
         `UPDATE users
          SET credits_remaining = credits_remaining - 1
@@ -73,8 +76,8 @@ export async function recordExport(req, res) {
       );
     }
 
-    /**
-     * PRO PLAN — Expiry check
+    /*
+     * PRO PLAN
      */
     if (user.plan === 'pro') {
       if (
@@ -86,8 +89,8 @@ export async function recordExport(req, res) {
       }
     }
 
-    /**
-     * Usage log
+    /*
+     * USAGE LOG
      */
     await client.query(
       `INSERT INTO usage_logs (user_id, action, ip_address)
