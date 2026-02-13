@@ -2,7 +2,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-console.log("🔥 SERVER FILE VERSION: Production Hardened + Billing Secured + Idempotent Webhook + Robust CORS");
+console.log("🔥 SERVER FILE VERSION: Production Hardened + Billing Secured + Idempotent Webhook + Robust CORS + Pricing Endpoint");
 console.log("DATABASE_URL exists:", !!process.env.DATABASE_URL);
 
 import helmet from "helmet";
@@ -16,9 +16,6 @@ import authRoutes from "./routes/auth.routes.js";
 import { authenticateUser } from "./middleware/auth.middleware.js";
 import { checkPlanAccess } from "./middleware/credits.middleware.js";
 import { PRICING } from "./config/pricing.js";
-import pricingRoutes from "./routes/pricing.routes.js";
-app.use("/pricing", pricingRoutes);
-
 
 const app = express();
 
@@ -51,15 +48,12 @@ const allowedOrigin = process.env.FRONTEND_URL;
 app.use(cors({
   origin: (origin, callback) => {
 
-    // Allow server-to-server (no origin header)
     if (!origin) return callback(null, true);
 
-    // Allow primary frontend domain
     if (origin === allowedOrigin) {
       return callback(null, true);
     }
 
-    // Allow ALL Lovable preview / project domains
     if (
       origin.endsWith(".lovable.app") ||
       origin.endsWith(".lovableproject.com")
@@ -75,7 +69,6 @@ app.use(cors({
   credentials: true
 }));
 
-// Explicit preflight handler
 app.options("*", cors());
 
 /* ============================
@@ -94,6 +87,13 @@ const upload = multer({
 app.get("/", (req, res) =>
   res.send("YouScan Engine: Secure Production Active")
 );
+
+/* ============================
+   PRICING ENDPOINT
+============================ */
+app.get("/pricing", (req, res) => {
+  res.json(PRICING);
+});
 
 /* ============================
    AUTH ROUTES
@@ -229,7 +229,7 @@ app.post(
 );
 
 /* ============================
-   OZOW WEBHOOK (HARDENED + IDEMPOTENT + SECRET)
+   OZOW WEBHOOK (HARDENED)
 ============================ */
 app.post("/payments/ozow-webhook", async (req, res) => {
   const client = await pool.connect();
