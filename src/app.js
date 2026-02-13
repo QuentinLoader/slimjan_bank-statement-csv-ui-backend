@@ -5,6 +5,7 @@ import cors from "cors";
 import { router as healthRoute } from "./routes/health.js";
 import { router as parseRoute } from "./routes/parse.js";
 import { router as exportRoute } from "./routes/export.js";
+import usageRoutes from './routes/usage.routes.js';
 
 const app = express();
 
@@ -26,6 +27,7 @@ app.use(cors({
 app.use("/health", healthRoute);
 app.use("/parse", parseRoute);
 app.use("/export", exportRoute);
+app.use('/usage', usageRoutes);
 
 /**
  * ERROR HANDLING
