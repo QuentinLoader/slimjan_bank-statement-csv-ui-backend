@@ -1,10 +1,4 @@
 // src/parsers/nedbank_transactions.js
-// Built against actual pdfplumber text extraction output from Nedbank statements.
-// Key quirks handled:
-//   - Words run together: "Openingbalance", "Closingbalance", "Accountnumber"
-//   - Asterisk glued to amount: "250.00*"
-//   - Tran-list prefix: "000643 26/06/2025 VAT ..."
-//   - Columns: [Fees] [Debits] [Credits] [Balance] — only balance is always present
 
 export function parseNedbank(text, sourceFile = "") {
   if (!text || typeof text !== "string") {
@@ -14,129 +8,108 @@ export function parseNedbank(text, sourceFile = "") {
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
 
   // ── Metadata ─────────────────────────────────────────────────────────────
-  let accountNumber  = "";
-  let clientName     = "";
-  const bankName     = "Nedbank";
-  let statementId    = "";
+  let accountNumber = "";
+  let clientName = "";
+  const bankName = "Nedbank";
+  let statementId = "";
   let openingBalance = null;
   let closingBalance = null;
 
-  // Account number — "Current account 1605175781" or "Accountnumber 1605175781"
-  const accMatch = text.match(/(?:Current account|Accountnumber)[^\d]*(\d{8,12})/i);
+  // Account number - Handles multi-line or "Account number \n 1605..." 
+  const accMatch = text.match(/Account\s*number\s*([\d]{10,13})/i) || text.match(/Account\s*number\s*\n\s*([\d]{10,13})/i);
   if (accMatch) accountNumber = accMatch[1];
 
-  // Client name — first line starting with Mr/Mrs/Ms/Dr
-  const nameMatch = text.match(/^((?:Mr|Mrs|Ms|Dr|Prof)\.?\s+[A-Z][A-Z\s]+)$/m);
-  if (nameMatch) clientName = nameMatch[1].trim();
+  // Client name [cite: 3]
+  const nameMatch = text.match(/(?:Mr|Mrs|Ms|Dr|Prof)\s+[A-Z\s]+/i);
+  if (nameMatch) clientName = nameMatch[0].trim();
 
-  // Envelope / statement ID
-  const envMatch = text.match(/Envelope[:\s]+(\d+)\s+of\s+\d+/i);
-  if (envMatch) statementId = envMatch[1];
-
-  // ── Find where the transaction list starts ────────────────────────────────
-  // Look for the header row that contains "Debits" AND "Balance" AND "Credits"
-  const headerIdx = lines.findIndex(l =>
-    /Debits/i.test(l) && /Balance/i.test(l) && /Credits/i.test(l)
-  );
-  const txLines = headerIdx >= 0 ? lines.slice(headerIdx + 1) : lines;
-
-  // Money pattern: optional minus, digits, optional comma-thousands, dot-cents,
-  // optional trailing asterisk (fees marker)
-  const MONEY_RE = /-?\d{1,3}(?:,\d{3})*\.\d{2}\*?/g;
-
-  // Match a transaction line: optional leading tran-list number, then a DD/MM/YYYY date
-  const LINE_RE = /^(?:\d+\s+)?(\d{2}\/\d{2}\/\d{4})\s+(.+)$/;
-
+  // ── Transaction Parsing ──────────────────────────────────────────────────
   const transactions = [];
   let previousBalance = null;
 
-  for (const line of txLines) {
-    const lm = line.match(LINE_RE);
-    if (!lm) continue;
+  // Regex for Date DD/MM/YYYY 
+  const DATE_RE = /(\d{2}\/\d{2}\/\d{4})/;
+  // Regex for Money (handles R, commas, and trailing asterisks) [cite: 84, 85]
+  const MONEY_RE = /R?\s?(-?\d{1,3}(?:[,\s]\d{3})*\.\d{2})\*?/g;
 
-    const date = lm[1];
-    const rest = lm[2];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const dateMatch = line.match(DATE_RE);
 
-    // ── Opening balance line ──────────────────────────────────────────────
-    if (/opening\s*balance/i.test(rest)) {
-      const money = rest.match(MONEY_RE);
-      if (money) {
-        openingBalance = parseMoney(money[money.length - 1]);
-        previousBalance = openingBalance;
+    if (dateMatch) {
+      const date = dateMatch[1];
+      
+      // Look ahead for description and amounts in this line or the next
+      // Nedbank often puts the description on the same line as the date 
+      let description = line.replace(DATE_RE, "").replace(/\d{6}/, "").trim(); 
+      
+      // If description is empty, check the next line
+      if (description.length < 2 && lines[i+1] && !lines[i+1].match(DATE_RE)) {
+        description = lines[i+1];
       }
-      continue; // not a transaction row
+
+      const moneyMatches = line.match(MONEY_RE);
+      
+      // Handle Opening Balance Row 
+      if (/Opening\s*balance/i.test(line) || /Opening\s*balance/i.test(description)) {
+        const vals = line.match(MONEY_RE);
+        if (vals) {
+          openingBalance = parseMoney(vals[vals.length - 1]);
+          previousBalance = openingBalance;
+        }
+        continue;
+      }
+
+      // Handle Closing Balance Row 
+      if (/Closing\s*balance/i.test(line)) {
+        const vals = line.match(MONEY_RE);
+        if (vals) closingBalance = parseMoney(vals[vals.length - 1]);
+        continue;
+      }
+
+      if (moneyMatches) {
+        // The last money value on a line is ALWAYS the running balance 
+        const balance = parseMoney(moneyMatches[moneyMatches.length - 1]);
+        
+        // Calculate amount based on balance shift if previousBalance exists
+        let amount = 0;
+        if (previousBalance !== null) {
+          amount = parseFloat((balance - previousBalance).toFixed(2));
+        } else if (moneyMatches.length >= 2) {
+          // Fallback if it's the first transaction after opening balance
+          amount = parseMoney(moneyMatches[0]); 
+        }
+
+        transactions.push({
+          date,
+          description: description.split(/[R0-9]/)[0].trim(), // Clean description
+          amount,
+          balance,
+          account: accountNumber,
+          clientName,
+          bankName,
+          sourceFile
+        });
+
+        previousBalance = balance;
+      }
     }
-
-    // ── Closing balance line ──────────────────────────────────────────────
-    if (/closing\s*balance/i.test(rest)) {
-      const money = rest.match(MONEY_RE);
-      if (money) closingBalance = parseMoney(money[money.length - 1]);
-      continue;
-    }
-
-    // ── Collect money values ──────────────────────────────────────────────
-    const moneyMatches = rest.match(MONEY_RE);
-    if (!moneyMatches || moneyMatches.length < 1) continue;
-
-    // Balance is always the LAST money value on the line
-    const balance = parseMoney(moneyMatches[moneyMatches.length - 1]);
-
-    // ── Description: text before the first money token ────────────────────
-    const firstMoneyIdx = rest.search(/-?\d{1,3}(?:,\d{3})*\.\d{2}\*?/);
-    let description = firstMoneyIdx > 0
-      ? rest.slice(0, firstMoneyIdx).trim()
-      : rest.trim();
-
-    // Strip trailing asterisk, whitespace, or "= R" artefacts left by inline VAT amounts
-    description = description.replace(/[\s*]+$/, "").replace(/\s*=\s*R\s*$/, "").trim();
-
-    // ── Amount derived from balance movement ──────────────────────────────
-    // This is more reliable than parsing the debit/credit column because the
-    // PDF column alignment is inconsistent after text extraction.
-    let amount = 0;
-    if (previousBalance !== null) {
-      amount = parseFloat((balance - previousBalance).toFixed(2));
-    } else if (moneyMatches.length >= 2) {
-      // No previous balance yet — use second-to-last value as a fallback
-      amount = parseMoney(moneyMatches[moneyMatches.length - 2]);
-    }
-
-    previousBalance = balance;
-
-    transactions.push({
-      date,
-      description,
-      amount,
-      balance,
-      account:    accountNumber,
-      clientName,
-      statementId,
-      bankName,
-      sourceFile
-    });
   }
 
-  // Fallback: grab closing balance from summary block if not found in tx list
-  if (closingBalance === null) {
-    const cb = text.match(/[Cc]losing\s*balance\s+R?([\d,]+\.\d{2})/);
-    if (cb) closingBalance = parseMoney(cb[1]);
+  // Final metadata cleanup
+  if (closingBalance === null && previousBalance !== null) {
+    closingBalance = previousBalance;
   }
 
   return {
-    metadata: {
-      accountNumber,
-      clientName,
-      bankName,
-      statementId,
-      openingBalance,
-      closingBalance,
-      sourceFile
-    },
+    metadata: { accountNumber, clientName, bankName, openingBalance, closingBalance, sourceFile },
     transactions
   };
 }
 
 function parseMoney(value) {
-  if (typeof value !== "string") return 0;
-  return parseFloat(value.replace(/[*,]/g, ""));
+  if (!value) return 0;
+  // Remove currency symbol, commas, spaces, and asterisks [cite: 84, 85]
+  const clean = value.replace(/[R\s,*\+]/g, "");
+  return parseFloat(clean);
 }
