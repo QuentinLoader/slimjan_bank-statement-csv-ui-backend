@@ -3,7 +3,7 @@
  * Strategy: Money-first + balance-driven correction (FNB style)
  */
 
-import { extractStandardBankMetadata } from "./standardbank_metadata.js";
+import { extractStandardBankMetadata } from "./standardbank.metadata.js";
 
 export const parseStandardBank = (text) => {
   const metadata = extractStandardBankMetadata(text);
