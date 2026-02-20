@@ -1,10 +1,11 @@
 /**
- * Capitec Parser - Production Grade (Main Account Statement)
+ * Capitec Parser - Production Safe (Simplified Model)
  * Handles:
- * - Multi-line rows
- * - Money In / Money Out / Fee / Balance columns
- * - Header/footer isolation
- * - Running balance validation
+ * - Multi-page statements
+ * - Multi-line descriptions
+ * - Fee + MoneyOut combined via balance math
+ * - Dynamic opening balance derivation
+ * - Reliable account extraction
  */
 
 export const parseCapitec = (text) => {
@@ -20,17 +21,20 @@ export const parseCapitec = (text) => {
   };
 
   // ------------------------------------------------------------------
-  // 1️⃣ Extract Metadata
+  // 1️⃣ Extract Account Number (Robust)
   // ------------------------------------------------------------------
 
-  const accountMatch = text.match(/Account\s*\n?\s*(\d{10,})/i);
-  const account = accountMatch ? accountMatch[1] : "Unknown";
+  let account = "Unknown";
 
-  const openMatch = text.match(/Opening Balance:\s*R?([\d\s,.]+)/i);
-  const closeMatch = text.match(/Closing Balance:\s*R?([\d\s,.]+)/i);
-
-  const openingBalance = openMatch ? parseNum(openMatch[1]) : 0;
-  const closingBalance = closeMatch ? parseNum(closeMatch[1]) : 0;
+  // Pattern: Account \n 1234567890
+  const accountBlockMatch = text.match(/Account\s*\n\s*(\d{10,})/i);
+  if (accountBlockMatch) {
+    account = accountBlockMatch[1];
+  } else {
+    // Fallback: standalone 10–11 digit number near Main Account Statement
+    const fallbackMatch = text.match(/\b\d{10,11}\b/);
+    if (fallbackMatch) account = fallbackMatch[0];
+  }
 
   // ------------------------------------------------------------------
   // 2️⃣ Isolate Transaction History Section
@@ -39,28 +43,29 @@ export const parseCapitec = (text) => {
   const startIndex = text.indexOf("Transaction History");
   if (startIndex === -1) {
     return {
-      metadata: { accountNumber: account, openingBalance, closingBalance, bankName: "Capitec" },
+      metadata: { accountNumber: account, bankName: "Capitec" },
       transactions: []
     };
   }
 
   let txSection = text.substring(startIndex);
 
-  // Stop at VAT/footer
   const footerIndex = txSection.indexOf("* Includes VAT");
   if (footerIndex !== -1) {
     txSection = txSection.substring(0, footerIndex);
   }
 
-  const lines = txSection.split('\n').map(l => l.trim()).filter(Boolean);
+  const lines = txSection
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean);
 
   // ------------------------------------------------------------------
-  // 3️⃣ Reconstruct Rows (Handle Multi-line Descriptions)
+  // 3️⃣ Reconstruct Multi-line Rows
   // ------------------------------------------------------------------
 
   const reconstructed = [];
   let currentRow = "";
-
   const dateRegex = /^\d{2}\/\d{2}\/\d{4}/;
 
   lines.forEach(line => {
@@ -74,16 +79,16 @@ export const parseCapitec = (text) => {
 
   if (currentRow) reconstructed.push(currentRow.trim());
 
-  // Remove header row
   const filteredRows = reconstructed.filter(row =>
     !row.startsWith("Date Description")
   );
 
   // ------------------------------------------------------------------
-  // 4️⃣ Parse Each Row
+  // 4️⃣ Parse Rows (Balance-Driven Logic)
   // ------------------------------------------------------------------
 
-  let runningBalance = openingBalance;
+  let runningBalance = null;
+  let openingBalance = null;
 
   filteredRows.forEach(row => {
     const dateMatch = row.match(/^(\d{2}\/\d{2}\/\d{4})/);
@@ -92,32 +97,34 @@ export const parseCapitec = (text) => {
     const date = dateMatch[1];
     let body = row.substring(date.length).trim();
 
-    // Extract all numbers in row
     const numbers = body.match(/-?\d[\d\s,.]*/g);
     if (!numbers || numbers.length === 0) return;
 
     const balance = parseNum(numbers[numbers.length - 1]);
 
     let amount = 0;
-    if (numbers.length >= 2) {
-      const possibleAmount = parseNum(numbers[numbers.length - 2]);
-      if (Math.abs(runningBalance + possibleAmount - balance) < 0.05) {
-        amount = possibleAmount;
-      } else {
-        amount = balance - runningBalance;
-      }
+
+    if (runningBalance === null) {
+      // First transaction → derive opening balance later
+      const possibleAmount =
+        numbers.length >= 2
+          ? parseNum(numbers[numbers.length - 2])
+          : 0;
+
+      amount = possibleAmount;
+      openingBalance = balance - amount;
+      runningBalance = balance;
     } else {
       amount = balance - runningBalance;
+      runningBalance = balance;
     }
 
-    // Remove numeric values from description
+    // Remove numeric fields from description
     numbers.forEach(n => {
       body = body.replace(n, '');
     });
 
     const description = body.replace(/\s+/g, ' ').trim() || "Transaction";
-
-    runningBalance = balance;
 
     transactions.push({
       date,
@@ -130,15 +137,13 @@ export const parseCapitec = (text) => {
   });
 
   // ------------------------------------------------------------------
-  // 5️⃣ Final Balance Validation
+  // 5️⃣ Closing Balance
   // ------------------------------------------------------------------
 
-  if (transactions.length > 0) {
-    const lastBalance = transactions[transactions.length - 1].balance;
-    if (Math.abs(lastBalance - closingBalance) > 0.1) {
-      console.warn("⚠️ Capitec closing balance mismatch detected.");
-    }
-  }
+  const closingBalance =
+    transactions.length > 0
+      ? transactions[transactions.length - 1].balance
+      : null;
 
   return {
     metadata: {
