@@ -5,31 +5,32 @@ export function parseNedbank(text, sourceFile = "") {
 
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
   
-  // ── 1. INITIALIZE STATE ──────────────────────────────────────────────────
   let accountNumber = "";
   let clientName = "";
   let openingBalance = null;
   let closingBalance = null;
-  const transactions = [];
   let runningBalance = null;
+  const transactions = [];
 
-  // ── 2. METADATA EXTRACTION (High Reliability) ───────────────────────────
-  // Account Number: Look for number following "Account number" [cite: 19, 20]
+  // 1. ANCHOR SEARCH: Find metadata first to set the state
   const accMatch = text.match(/Account\s*number\s*\n?\s*(\d{10,})/i);
   if (accMatch) accountNumber = accMatch[1];
 
-  // Client Name: Specifically looking for the Mr/Ms line [cite: 3]
   const nameMatch = text.match(/(?:Mr|Mrs|Ms|Dr|Prof)\s+[A-Z\s]{5,}/i);
   if (nameMatch) clientName = nameMatch[0].trim();
 
-  // Summary Block Fallback: Capture Opening/Closing from the top table [cite: 37, 38, 46, 47]
-  const summaryOpening = text.match(/Opening\s*balance\s*R?([\d,\s]+\.\d{2})/i);
-  if (summaryOpening) openingBalance = parseMoney(summaryOpening[1]);
+  // 2. SEARCH FOR GLOBAL TOTALS (The "Reconciliation Foundation")
+  // We look for these globally to ensure they are available even if the line parsing fails.
+  const summaryOpening = text.match(/Opening\s*balance\s*R?\s*([\d,\s]+\.\d{2})/i);
+  if (summaryOpening) {
+    openingBalance = parseMoney(summaryOpening[1]);
+    runningBalance = openingBalance;
+  }
 
-  const summaryClosing = text.match(/Closing\s*balance\s*R?([\d,\s]+\.\d{2})/i);
+  const summaryClosing = text.match(/Closing\s*balance\s*R?\s*([\d,\s]+\.\d{2})/i);
   if (summaryClosing) closingBalance = parseMoney(summaryClosing[1]);
 
-  // ── 3. TRANSACTION PROCESSING ───────────────────────────────────────────
+  // 3. TRANSACTION ENGINE
   const DATE_RE = /^(\d{2}\/\d{2}\/\d{4})/;
   const MONEY_RE = /-?\d{1,3}(?:[,\s]\d{3})*\.\d{2}/g;
 
@@ -40,63 +41,66 @@ export function parseNedbank(text, sourceFile = "") {
     if (dateMatch) {
       const date = dateMatch[1];
       const moneyMatches = line.match(MONEY_RE) || [];
-      
-      // A: IDENTIFY OPENING BALANCE LINE 
+
+      // A: LOCK IN OPENING BALANCE (from the transaction list row)
       if (/Opening\s*balance/i.test(line)) {
         const val = parseMoney(moneyMatches[moneyMatches.length - 1]);
         openingBalance = val;
         runningBalance = val;
-        continue; // Do not add opening balance as a transaction row
+        continue; // Do not list opening balance as a spending item
       }
 
-      // B: IDENTIFY CLOSING BALANCE LINE 
+      // B: IDENTIFY THE CLOSING BALANCE ROW
       if (/Closing\s*balance/i.test(line)) {
         closingBalance = parseMoney(moneyMatches[moneyMatches.length - 1]);
         continue;
       }
 
-      // C: PROCESS STANDARD TRANSACTION
+      // C: PROCESS REAL TRANSACTIONS
       if (moneyMatches.length > 0) {
-        const currentLineBalance = parseMoney(moneyMatches[moneyMatches.length - 1]);
+        const lineBalance = parseMoney(moneyMatches[moneyMatches.length - 1]);
         
-        // Description Logic: Capture text, handle wraps, and remove artifacts 
+        // Extract Description: remove date and all money amounts
         let description = line.replace(DATE_RE, "");
         moneyMatches.forEach(m => description = description.replace(m, ""));
         description = description.replace(/[*R,]/g, "").replace(/^\d{6}/, "").trim();
 
-        // Check for multi-line description wrap
+        // Handle multi-line wrapping (Description check on next line)
         if (lines[i+1] && !lines[i+1].match(DATE_RE) && !lines[i+1].match(MONEY_RE)) {
           description += " " + lines[i+1].trim();
           i++; 
         }
 
-        // Calculate Amount (Delta)
+        // DELTA CALCULATION: Ensures repeatability regardless of column alignment
         let amount = 0;
         if (runningBalance !== null) {
-          amount = parseFloat((currentLineBalance - runningBalance).toFixed(2));
+          amount = parseFloat((lineBalance - runningBalance).toFixed(2));
         }
 
-        transactions.push({
-          date,
-          description: description.toUpperCase(),
-          amount,
-          balance: currentLineBalance,
-          account: accountNumber,
-          clientName,
-          bankName: "Nedbank",
-          sourceFile
-        });
-
-        runningBalance = currentLineBalance;
+        // Only add if it's not a summary/closing row
+        if (!/closing\s*balance/i.test(description)) {
+          transactions.push({
+            date,
+            description: description.toUpperCase(),
+            amount,
+            balance: lineBalance,
+            account: accountNumber,
+            clientName,
+            bankName: "Nedbank",
+            sourceFile
+          });
+          runningBalance = lineBalance;
+        }
       }
     }
   }
 
+  // Final validation to ensure openingBalance isn't null for the UI
   return {
     metadata: {
       accountNumber,
       clientName,
-      openingBalance: openingBalance || 0, // Ensure R0.00 isn't returned if found 
+      openingBalance: openingBalance || 0,
       closingBalance: closingBalance || runningBalance,
       bankName: "Nedbank",
       sourceFile
@@ -107,5 +111,6 @@ export function parseNedbank(text, sourceFile = "") {
 
 function parseMoney(value) {
   if (!value) return 0;
+  // Standardize South African spacing/comma formats
   return parseFloat(value.replace(/[R\s,]/g, ""));
 }
