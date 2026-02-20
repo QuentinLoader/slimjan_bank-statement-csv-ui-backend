@@ -1,4 +1,4 @@
-import { extractNedbankMetadata } from "./nedbank_metadata.js";
+import { extractNedbankMetadata } from "./nedbank.metadata.js";
 
 export const parseNedbank = (text) => {
   const metadata = extractNedbankMetadata(text);
