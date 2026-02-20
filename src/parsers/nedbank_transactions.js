@@ -1,54 +1,49 @@
 // src/parsers/nedbank_transactions.js
 
 export function parseNedbank(text) {
-  if (!text || typeof text !== "string") return [];
+  if (!text || typeof text !== "string") return { metadata: {}, transactions: [] };
 
-  const lines = text
-    .split("\n")
-    .map(l => l.trim())
-    .filter(Boolean);
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
 
   const transactions = [];
-
   let openingBalance = null;
   let closingBalance = null;
 
-  const dateRegex = /^\d{2}\/\d{2}\/\d{4}/;
+  const dateLineRegex = /^(\d{2}\/\d{2}\/\d{4})\s+(.*)$/;
+  const moneyRegex = /-?\d{1,3}(?:,\d{3})*(?:\.\d{2})/g;
 
   for (const line of lines) {
-    if (!dateRegex.test(line)) continue;
+    const dateMatch = line.match(dateLineRegex);
+    if (!dateMatch) continue;
 
-    // Split on 2+ spaces
-    const parts = line.split(/\s{2,}/);
+    const date = dateMatch[1];
+    const rest = dateMatch[2];
 
-    if (parts.length < 2) continue;
-
-    const date = parts[0];
-    const description = parts[1] || "";
-
-    // Opening balance row
-    if (description.toLowerCase().includes("opening balance")) {
-      const balance = extractLastNumber(parts);
-      openingBalance = balance;
+    // Opening balance
+    if (rest.toLowerCase().includes("opening balance")) {
+      const money = rest.match(moneyRegex);
+      if (money) {
+        openingBalance = parseMoney(money[money.length - 1]);
+      }
       continue;
     }
 
-    // Extract debit / credit
-    const numbers = parts
-      .map(p => cleanNumber(p))
-      .filter(n => n !== null);
+    const moneyMatches = rest.match(moneyRegex);
+    if (!moneyMatches || moneyMatches.length < 1) continue;
 
-    if (numbers.length === 0) continue;
+    // Last number = balance
+    const balance = parseMoney(moneyMatches[moneyMatches.length - 1]);
 
-    const balance = numbers[numbers.length - 1];
-
-    // Detect amount (second last number)
+    // Second last number = transaction amount (if exists)
     let amount = null;
-    if (numbers.length >= 2) {
-      amount = numbers[numbers.length - 2];
+    if (moneyMatches.length >= 2) {
+      amount = parseMoney(moneyMatches[moneyMatches.length - 2]);
+    } else {
+      continue;
     }
 
-    if (amount === null) continue;
+    // Remove trailing money values from description
+    const description = rest.replace(moneyRegex, "").replace(/\*/g, "").trim();
 
     transactions.push({
       date,
@@ -58,13 +53,11 @@ export function parseNedbank(text) {
     });
   }
 
-  if (transactions.length > 0) {
-    closingBalance = transactions[transactions.length - 1].balance;
+  // Closing balance from final line
+  const closingMatch = text.match(/Closing balance\s+(-?\d{1,3}(?:,\d{3})*(?:\.\d{2}))/);
+  if (closingMatch) {
+    closingBalance = parseMoney(closingMatch[1]);
   }
-
-  console.log("Nedbank parsed:", transactions.length);
-  console.log("Opening:", openingBalance);
-  console.log("Closing:", closingBalance);
 
   return {
     metadata: {
@@ -75,17 +68,6 @@ export function parseNedbank(text) {
   };
 }
 
-function cleanNumber(value) {
-  const num = parseFloat(
-    value.replace(/,/g, "").replace(/[^\d.-]/g, "")
-  );
-  return isNaN(num) ? null : num;
-}
-
-function extractLastNumber(parts) {
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const num = cleanNumber(parts[i]);
-    if (num !== null) return num;
-  }
-  return null;
+function parseMoney(value) {
+  return parseFloat(value.replace(/,/g, ""));
 }
