@@ -197,4 +197,34 @@ router.post("/login", async (req, res) => {
 
 /* Remaining routes unchanged */
 
+/* ============================
+   GET CURRENT USER
+============================ */
+router.get("/me", authenticateUser, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT email,
+              plan,
+              credits_remaining,
+              lifetime_parses_used,
+              subscription_expires_at,
+              is_verified
+       FROM users
+       WHERE id = $1`,
+      [req.user.userId]
+    );
+
+    const user = result.rows[0];
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json(user);
+
+  } catch (err) {
+    console.error("ME ERROR", err);
+    res.status(500).json({ message: "Failed to fetch user" });
+  }
+});
 export default router;
