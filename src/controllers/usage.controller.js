@@ -1,10 +1,8 @@
-import pool from '../config/db.js';
-import { PRICING } from '../config/pricing.js';
+import pool from "../config/db.js";
 
 export async function recordExport(req, res) {
-
   if (!req.user || !req.user.userId) {
-    return res.status(401).json({ error: 'Unauthorized' });
+    return res.status(401).json({ error: "Unauthorized" });
   }
 
   const userId = req.user.userId;
@@ -13,99 +11,154 @@ export async function recordExport(req, res) {
   const client = await pool.connect();
 
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
     const userResult = await client.query(
-      `SELECT plan, lifetime_parses_used, credits_remaining, subscription_expires_at
-       FROM users
-       WHERE id = $1
-       FOR UPDATE`,
+      `
+      SELECT 
+        id,
+        plan_code,
+        credits_remaining,
+        lifetime_parses_used
+      FROM users
+      WHERE id = $1
+      FOR UPDATE
+      `,
       [userId]
     );
 
     if (userResult.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(401).json({ error: 'Unauthorized' });
+      await client.query("ROLLBACK");
+      return res.status(401).json({ error: "Unauthorized" });
     }
 
     const user = userResult.rows[0];
 
-    /*
-     * FREE PLAN
-     */
-    if (user.plan === 'free') {
+    let creditsDeducted = 0;
 
-      const FREE_LIMIT = PRICING.FREE.lifetime_parses;
+    /*
+     * =========================================
+     * FREE PLAN (15 lifetime exports)
+     * =========================================
+     */
+    if (user.plan_code === "FREE") {
+      const FREE_LIMIT = 15;
 
       const updateResult = await client.query(
-        `UPDATE users
-         SET lifetime_parses_used = lifetime_parses_used + 1
-         WHERE id = $1
-           AND lifetime_parses_used < $2`,
+        `
+        UPDATE users
+        SET lifetime_parses_used = lifetime_parses_used + 1
+        WHERE id = $1
+          AND lifetime_parses_used < $2
+        `,
         [userId, FREE_LIMIT]
       );
 
       if (updateResult.rowCount === 0) {
-        await client.query('ROLLBACK');
-        return res.status(403).json({ code: 'FREE_LIMIT_REACHED' });
+        await client.query("ROLLBACK");
+        return res.status(402).json({
+          error: "FREE_LIMIT_REACHED",
+          upgrade_options: [
+            "PAYG_10",
+            "MONTHLY_25",
+            "PRO_YEAR_UNLIMITED"
+          ]
+        });
       }
+
+      creditsDeducted = 0;
     }
 
     /*
-     * PAY-AS-YOU-GO
+     * =========================================
+     * PRO YEAR UNLIMITED (R485 yearly)
+     * =========================================
      */
-    if (user.plan === 'pay-as-you-go') {
+    else if (user.plan_code === "PRO_YEAR_UNLIMITED") {
+      // Unlimited — no deduction
+      creditsDeducted = 0;
+    }
 
+    /*
+     * =========================================
+     * MONTHLY_25 OR PAYG_10
+     * =========================================
+     */
+    else if (
+      user.plan_code === "MONTHLY_25" ||
+      user.plan_code === "PAYG_10"
+    ) {
       const updateResult = await client.query(
-        `UPDATE users
-         SET credits_remaining = credits_remaining - 1
-         WHERE id = $1
-           AND credits_remaining > 0`,
+        `
+        UPDATE users
+        SET credits_remaining = credits_remaining - 1
+        WHERE id = $1
+          AND credits_remaining > 0
+        `,
         [userId]
       );
 
       if (updateResult.rowCount === 0) {
-        await client.query('ROLLBACK');
-        return res.status(403).json({ code: 'NO_CREDITS' });
+        await client.query("ROLLBACK");
+
+        return res.status(402).json({
+          error: "CREDITS_EXHAUSTED",
+          upgrade_options:
+            user.plan_code === "PAYG_10"
+              ? ["MONTHLY_25", "PRO_YEAR_UNLIMITED"]
+              : ["PRO_YEAR_UNLIMITED"]
+        });
       }
 
-      await client.query(
-        `INSERT INTO credit_transactions (user_id, type, amount, reference)
-         VALUES ($1, 'deduction', 1, 'csv_export')`,
-        [userId]
-      );
+      creditsDeducted = 1;
     }
 
     /*
-     * PRO PLAN
+     * =========================================
+     * INVALID PLAN
+     * =========================================
      */
-    if (user.plan === 'pro') {
-      if (
-        !user.subscription_expires_at ||
-        new Date(user.subscription_expires_at) < new Date()
-      ) {
-        await client.query('ROLLBACK');
-        return res.status(403).json({ code: 'SUBSCRIPTION_EXPIRED' });
-      }
+    else {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        error: "INVALID_PLAN"
+      });
     }
 
     /*
+     * =========================================
      * USAGE LOG
+     * =========================================
      */
     await client.query(
-      `INSERT INTO usage_logs (user_id, action, ip_address)
-       VALUES ($1, 'export_csv', $2)`,
-      [userId, ip]
+      `
+      INSERT INTO usage_logs
+        (user_id, action, ip_address, plan_code, credits_deducted)
+      VALUES
+        ($1, $2, $3, $4, $5)
+      `,
+      [
+        userId,
+        "export_csv",
+        ip,
+        user.plan_code,
+        creditsDeducted
+      ]
     );
 
-    await client.query('COMMIT');
+    await client.query("COMMIT");
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json({
+      success: true,
+      credits_deducted: creditsDeducted
+    });
 
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('recordExport error:', err);
-    return res.status(500).json({ error: 'Export recording failed' });
+    await client.query("ROLLBACK");
+    console.error("recordExport error:", err);
+    return res.status(500).json({
+      error: "Export recording failed"
+    });
   } finally {
     client.release();
   }

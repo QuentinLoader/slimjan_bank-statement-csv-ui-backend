@@ -1,32 +1,34 @@
 export const PRICING = {
   currency: "ZAR",
 
-  FREE: {
-    lifetime_parses: 15
-  },
-
-  PRO_MONTHLY: {
-    plan_code: "PRO_MONTHLY",
-    name: "Pro Subscription",
-    billing_cycle: "monthly",
-    price_cents: 15000
-  },
-
-  CREDIT_BUNDLES: {
-    CREDIT_10: {
-      plan_code: "CREDIT_10",
+  PLANS: {
+    PAYG_10: {
+      plan_code: "PAYG_10",
+      name: "Pay-as-YouScan",
+      type: "credits",
       credits: 10,
-      price_cents: 5000
+      price_cents: 2950,
+      recurring: false
     },
-    CREDIT_25: {
-      plan_code: "CREDIT_25",
-      credits: 25,
-      price_cents: 10000
+
+    MONTHLY_25: {
+      plan_code: "MONTHLY_25",
+      name: "Monthly 25 Plan",
+      type: "subscription",
+      billing_cycle: "monthly",
+      credits_per_cycle: 25,
+      price_cents: 4850,
+      recurring: true
     },
-    CREDIT_100: {
-      plan_code: "CREDIT_100",
-      credits: 100,
-      price_cents: 37500
+
+    PRO_YEAR_UNLIMITED: {
+      plan_code: "PRO_YEAR_UNLIMITED",
+      name: "Pro Year Unlimited",
+      type: "subscription",
+      billing_cycle: "yearly",
+      unlimited: true,
+      price_cents: 48500,
+      recurring: true
     }
   }
 };
