@@ -5,9 +5,7 @@ import crypto from "crypto";
 import pool from "../config/db.js";
 import { authenticateUser } from "../middleware/auth.middleware.js";
 import { sendVerificationEmail } from "../utils/email.js";
-import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const router = express.Router();
 
 /* ============================
@@ -31,8 +29,32 @@ router.post("/register", async (req, res) => {
 
     const result = await pool.query(
       `INSERT INTO users 
-        (email, password_hash, plan, credits_remaining, is_verified, verification_token)
-       VALUES ($1, $2, 'free', 15, false, $3)
+        (
+          email,
+          password_hash,
+          plan_code,
+          credits_remaining,
+          lifetime_parses_used,
+          subscription_status,
+          billing_cycle_start,
+          billing_cycle_end,
+          renewal_date,
+          is_verified,
+          verification_token
+        )
+       VALUES (
+          $1,
+          $2,
+          'FREE',
+          0,
+          0,
+          'inactive',
+          NULL,
+          NULL,
+          NULL,
+          false,
+          $3
+        )
        RETURNING id`,
       [email, hashedPassword, hashedToken]
     );
@@ -58,7 +80,7 @@ router.post("/register", async (req, res) => {
 });
 
 /* ============================
-   VERIFY EMAIL (IMPROVED UX)
+   VERIFY EMAIL
 ============================ */
 router.post("/verify-email", async (req, res) => {
   try {
@@ -73,7 +95,6 @@ router.post("/verify-email", async (req, res) => {
       .update(token)
       .digest("hex");
 
-    // Find user by verification token
     const result = await pool.query(
       `SELECT id, is_verified 
        FROM users 
@@ -84,7 +105,6 @@ router.post("/verify-email", async (req, res) => {
     const user = result.rows[0];
 
     if (user) {
-      // Valid token → verify
       await pool.query(
         `UPDATE users
          SET is_verified = true,
@@ -94,18 +114,6 @@ router.post("/verify-email", async (req, res) => {
       );
 
       return res.json({ message: "Email verified successfully" });
-    }
-
-    // If token not found, check if this token was already used
-    const alreadyVerifiedCheck = await pool.query(
-      `SELECT id 
-       FROM users 
-       WHERE is_verified = true 
-         AND verification_token IS NULL`
-    );
-
-    if (alreadyVerifiedCheck.rows.length > 0) {
-      return res.json({ message: "Email already verified" });
     }
 
     return res.status(400).json({ message: "Invalid or expired token" });
@@ -124,7 +132,9 @@ router.post("/resend-verification", authenticateUser, async (req, res) => {
     const userId = req.user.userId;
 
     const result = await pool.query(
-      `SELECT email, is_verified FROM users WHERE id = $1`,
+      `SELECT email, is_verified 
+       FROM users 
+       WHERE id = $1`,
       [userId]
     );
 
@@ -167,7 +177,7 @@ router.post("/login", async (req, res) => {
     const { email, password } = req.body;
 
     const result = await pool.query(
-      "SELECT * FROM users WHERE email = $1",
+      "SELECT id, password_hash FROM users WHERE email = $1",
       [email]
     );
 
@@ -195,8 +205,6 @@ router.post("/login", async (req, res) => {
   }
 });
 
-/* Remaining routes unchanged */
-
 /* ============================
    GET CURRENT USER
 ============================ */
@@ -204,10 +212,12 @@ router.get("/me", authenticateUser, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT email,
-              plan,
+              plan_code,
               credits_remaining,
               lifetime_parses_used,
-              subscription_expires_at,
+              subscription_status,
+              renewal_date,
+              billing_cycle_end,
               is_verified
        FROM users
        WHERE id = $1`,
@@ -227,4 +237,5 @@ router.get("/me", authenticateUser, async (req, res) => {
     res.status(500).json({ message: "Failed to fetch user" });
   }
 });
+
 export default router;

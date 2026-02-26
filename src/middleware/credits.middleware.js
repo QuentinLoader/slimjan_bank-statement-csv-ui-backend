@@ -5,10 +5,13 @@ export const checkPlanAccess = async (req, res, next) => {
     const userId = req.user.userId;
 
     const result = await pool.query(
-      `SELECT id, email, plan,
+      `SELECT id,
+              plan_code,
               credits_remaining,
               lifetime_parses_used,
-              subscription_expires_at,
+              subscription_status,
+              renewal_date,
+              billing_cycle_end,
               is_verified
        FROM users
        WHERE id = $1`,
@@ -24,9 +27,6 @@ export const checkPlanAccess = async (req, res, next) => {
       });
     }
 
-    // =============================
-    // EMAIL VERIFICATION ENFORCEMENT
-    // =============================
     if (!user.is_verified) {
       return res.status(403).json({
         code: "EMAIL_NOT_VERIFIED",
@@ -34,22 +34,16 @@ export const checkPlanAccess = async (req, res, next) => {
       });
     }
 
-    // Defensive plan validation
-    if (!user.plan) {
-      return res.status(403).json({
-        code: "INVALID_PLAN",
-        message: "Invalid account configuration."
-      });
-    }
+    const now = new Date();
 
     /* =============================
-       PRO PLAN
+       PRO YEAR UNLIMITED
     ============================= */
-    if (user.plan === "pro") {
-
+    if (user.plan_code === "PRO_YEAR_UNLIMITED") {
       if (
-        user.subscription_expires_at &&
-        new Date(user.subscription_expires_at) > new Date()
+        user.subscription_status === "active" &&
+        user.renewal_date &&
+        new Date(user.renewal_date) > now
       ) {
         req.userRecord = user;
         return next();
@@ -57,52 +51,58 @@ export const checkPlanAccess = async (req, res, next) => {
 
       return res.status(403).json({
         code: "SUBSCRIPTION_EXPIRED",
-        message: "Your Pro subscription has expired. Please renew or purchase credits."
+        message: "Your Pro subscription has expired."
       });
     }
 
     /* =============================
-       PAY-AS-YOU-GO
+       MONTHLY_25
     ============================= */
-    if (user.plan === "pay-as-you-go") {
-
-      if (
-        typeof user.credits_remaining !== "number" ||
-        user.credits_remaining <= 0
-      ) {
-        return res.status(403).json({
-          code: "NO_CREDITS",
-          message: "No credits remaining. Please purchase more."
-        });
+    if (user.plan_code === "MONTHLY_25") {
+      if (user.credits_remaining > 0) {
+        req.userRecord = user;
+        return next();
       }
 
-      req.userRecord = user;
-      return next();
+      return res.status(403).json({
+        code: "CREDITS_EXHAUSTED",
+        message: "Monthly credits exhausted."
+      });
     }
 
     /* =============================
-       FREE PLAN (15 LIFETIME)
+       PAYG_10
     ============================= */
-    if (user.plan === "free") {
-
-      if (
-        typeof user.lifetime_parses_used !== "number" ||
-        user.lifetime_parses_used >= 15
-      ) {
-        return res.status(403).json({
-          code: "FREE_LIMIT_REACHED",
-          message: "Free lifetime limit reached. Please upgrade."
-        });
+    if (user.plan_code === "PAYG_10") {
+      if (user.credits_remaining > 0) {
+        req.userRecord = user;
+        return next();
       }
 
-      req.userRecord = user;
-      return next();
+      return res.status(403).json({
+        code: "NO_CREDITS",
+        message: "No credits remaining."
+      });
     }
 
-    // Unknown plan type
+    /* =============================
+       FREE
+    ============================= */
+    if (user.plan_code === "FREE") {
+      if (user.lifetime_parses_used < 15) {
+        req.userRecord = user;
+        return next();
+      }
+
+      return res.status(403).json({
+        code: "FREE_LIMIT_REACHED",
+        message: "Free lifetime limit reached."
+      });
+    }
+
     return res.status(403).json({
-      code: "INVALID_PLAN_TYPE",
-      message: "Invalid plan type."
+      code: "INVALID_PLAN",
+      message: "Invalid plan configuration."
     });
 
   } catch (err) {
