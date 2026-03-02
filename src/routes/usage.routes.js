@@ -1,15 +1,10 @@
 import express from "express";
-import { recordExport } from "../controllers/usage.controller.js";
-import { authenticateUser } from "../middleware/auth.middleware.js";
-
 
 const router = express.Router();
 
-router.post(
-  "/record-export",
-  authenticateUser,
-  billingMiddleware,
-  recordExport
-);
+// Temporary placeholder
+router.get("/", (req, res) => {
+  res.json({ message: "Usage route active" });
+});
 
 export default router;
