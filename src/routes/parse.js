@@ -1,138 +1,124 @@
 import express from "express";
 import multer from "multer";
+import rateLimit from "express-rate-limit";
+
 import pool from "../config/db.js";
 import { parseStatement } from "../services/parseStatement.js";
 import { authenticateUser } from "../middleware/auth.middleware.js";
-import { deductUserCredit } from "../services/billing.service.js";
-
-// 🔥 PROVE WHICH FILE IS RUNNING
-console.log("🔥 ACTIVE PARSE ROUTE FILE:", import.meta.url);
+import { checkPlanAccess } from "../middleware/credits.middleware.js";
 
 export const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage() });
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }
+});
+
+const parseLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30
+});
 
 router.post(
   "/",
+  parseLimiter,
   authenticateUser,
-  upload.single("file"),
+  checkPlanAccess,
+  upload.any(),
   async (req, res) => {
-
-    console.log("🔥 /parse ROUTE HIT");
-    console.log("🔥 FILE:", import.meta.url);
-
-    const client = await pool.connect();
-
     try {
-      const userId = req.user.userId;
-      console.log("👤 User ID:", userId);
+      const user = req.userRecord;
+      const files = req.files || [];
 
-      if (!req.file) {
-        console.log("🚫 NO_FILE_UPLOADED");
+      if (files.length === 0) {
         return res.status(400).json({ error: "NO_FILE_UPLOADED" });
       }
 
-      console.log("📥 File received in route, passing to service...");
+      let allTransactions = [];
 
-      const result = await parseStatement(req.file.buffer);
+      for (const file of files) {
+        const result = await parseStatement(file.buffer);
 
-      console.log("🧠 Raw parseStatement result:");
-      console.dir(result, { depth: null });
+        if (!result) {
+          return res.status(500).json({ error: "PARSER_ERROR" });
+        }
 
-      // ==========================================================
-      // 🚨 OPTIONAL HARD TEST (UNCOMMENT TO FORCE VERIFY ROUTE)
-      // ==========================================================
-      // return res.status(418).json({ test: "ACTIVE_PARSE_ROUTE_CONFIRMED" });
+        // ===============================
+        // HANDLE PARSER ERROR CODES
+        // ===============================
 
-      // ==========================================================
-      // 1️⃣ HANDLE PARSER ERROR CODES FIRST
-      // ==========================================================
-
-      if (result?.errorCode) {
-        console.log("🚫 Parser returned errorCode:", result.errorCode);
-
-        if (result.errorCode === "UNSUPPORTED_BANK") {
+        if (result?.errorCode === "UNSUPPORTED_BANK") {
           return res.status(400).json({
             error: "UNSUPPORTED_BANK",
             message: "This bank is not currently supported."
           });
         }
 
-        if (result.errorCode === "UNKNOWN_BANK") {
+        if (result?.errorCode === "UNKNOWN_BANK") {
           return res.status(400).json({
             error: "UNKNOWN_BANK",
             message: "We could not detect the bank type."
           });
         }
 
-        if (result.errorCode === "PARSER_ERROR") {
+        if (result?.errorCode === "PARSER_ERROR") {
           return res.status(500).json({
             error: "PARSER_ERROR"
           });
         }
+
+        if (!Array.isArray(result.transactions) || result.transactions.length === 0) {
+          return res.status(422).json({
+            error: "PARSE_FAILED_OR_EMPTY"
+          });
+        }
+
+        const standardized = result.transactions.map(t => ({
+          ...t,
+          sourceFile: file.originalname
+        }));
+
+        allTransactions = [...allTransactions, ...standardized];
       }
 
-      // ==========================================================
-      // 2️⃣ VALIDATE TRANSACTION STRUCTURE
-      // ==========================================================
+      // ===============================
+      // CREDIT DEDUCTION
+      // ===============================
 
-      if (
-        !result ||
-        !Array.isArray(result.transactions) ||
-        result.transactions.length === 0
-      ) {
-        console.log("⚠️ No transactions detected.");
-        console.log("⚠️ Result shape:", result);
-
-        return res.status(422).json({
-          error: "PARSE_FAILED_OR_EMPTY"
-        });
+      if (user.plan_code === "FREE") {
+        await pool.query(
+          `UPDATE users
+           SET lifetime_parses_used = lifetime_parses_used + 1
+           WHERE id = $1`,
+          [user.id]
+        );
+      } 
+      else if (user.plan_code !== "PRO_YEAR_UNLIMITED") {
+        await pool.query(
+          `UPDATE users
+           SET credits_remaining = credits_remaining - 1
+           WHERE id = $1`,
+          [user.id]
+        );
       }
 
-      // ==========================================================
-      // 3️⃣ DEDUCT CREDIT (Atomic inside billing.service)
-      // ==========================================================
-
-      await deductUserCredit(userId);
-      console.log("💳 Credit deducted for user:", userId);
-
-      await client.query(
+      await pool.query(
         `INSERT INTO usage_logs
-         (user_id, action, credits_deducted)
-         VALUES ($1, $2, $3)`,
-        [userId, "parse_statement", 1]
+         (user_id, action, plan_code, credits_deducted)
+         VALUES ($1, $2, $3, $4)`,
+        [
+          user.id,
+          "parse_statement",
+          user.plan_code,
+          user.plan_code === "PRO_YEAR_UNLIMITED" ? 0 : 1
+        ]
       );
 
-      console.log("✅ Returning structured result to frontend");
-
-      // ==========================================================
-      // 4️⃣ RETURN FULL STRUCTURED RESULT
-      // ==========================================================
-
-      return res.status(200).json(result);
+      return res.status(200).json(allTransactions);
 
     } catch (error) {
-
-      console.error("❌ Parse Route Error:", error);
-
-      if (error.message === "FREE_LIMIT_REACHED") {
-        return res.status(402).json({ error: "FREE_LIMIT_REACHED" });
-      }
-
-      if (error.message === "CREDITS_EXHAUSTED") {
-        return res.status(402).json({ error: "CREDITS_EXHAUSTED" });
-      }
-
-      if (error.message === "SUBSCRIPTION_EXPIRED") {
-        return res.status(402).json({ error: "SUBSCRIPTION_EXPIRED" });
-      }
-
-      return res.status(500).json({
-        error: "PARSE_ROUTE_FAILED"
-      });
-
-    } finally {
-      client.release();
-      console.log("🔚 DB client released");
+      console.error("PARSE ROUTE ERROR:", error);
+      return res.status(500).json({ error: "PARSE_ROUTE_FAILED" });
     }
   }
 );
