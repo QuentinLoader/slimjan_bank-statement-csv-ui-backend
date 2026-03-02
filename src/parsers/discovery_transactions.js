@@ -5,17 +5,21 @@ export function parseDiscovery(text, sourceFile = "") {
     return { metadata: {}, transactions: [] };
   }
 
-  // Normalize: Remove quotes and handle line breaks
-  const cleanText = text.replace(/"/g, "").replace(/\r/g, "\n");
-  const lines = cleanText.split("\n").map(l => l.trim()).filter(Boolean);
+  // Normalize: Keep newlines but remove carriage returns
+  const cleanText = text.replace(/\r/g, "");
 
   // --- Metadata Extraction ---
-  const accountNumber = (cleanText.match(/Transaction Account\s+(\d{10,13})/i) || [])[1] || null; [cite: 10]
-  const clientName = (cleanText.match(/(?:Mr|Mrs|Ms|Dr)\s+([A-Z][a-z]+\s[A-Z][a-z]+)/) || [])[0] || null; [cite: 3, 22]
+  const accountNumberMatch = cleanText.match(/(?:Discovery Gold Transaction Account)[^\d]+(\d{10,15})/i);
+  const accountNumber = accountNumberMatch ? accountNumberMatch[1] : null; 
   
-  // Find Opening/Closing balances specifically from the summary table
-  const openingBalance = parseMoney((cleanText.match(/Opening balance on\s+\d+\s+\w+\s+\d{4}\s+R?([\d\s,.-]+\.\d{2})/i) || [])[1]); [cite: 10, 14]
-  const closingBalance = parseMoney((cleanText.match(/Closing balance on\s+\d+\s+\w+\s+\d{4}\s+R?([\d\s,.-]+\.\d{2})/i) || [])[1]); [cite: 10, 19]
+  const clientNameMatch = cleanText.match(/(?:Mr|Mrs|Ms|Dr|Prof)\s+[A-Za-z\s]+/); 
+  const clientName = clientNameMatch ? clientNameMatch[0].trim() : null; 
+
+  const openingBalanceMatch = cleanText.match(/"Opening balance"[^\d-]+(-?\s?R[\d\s,.-]+\.\d{2})/i); 
+  const openingBalance = openingBalanceMatch ? parseMoney(openingBalanceMatch[1]) : 0; 
+
+  const closingBalanceMatch = cleanText.match(/"Closing balance"[^\d-]+(-?\s?R[\d\s,.-]+\.\d{2})/i); 
+  const closingBalance = closingBalanceMatch ? parseMoney(closingBalanceMatch[1]) : 0; 
 
   const transactions = [];
   let runningBalance = openingBalance;
@@ -25,54 +29,89 @@ export function parseDiscovery(text, sourceFile = "") {
     Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12" 
   };
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    
-    // Look for lines starting with "D MMM YYYY" or "DD MMM YYYY"
-    const dateMatch = line.match(/^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(20\d{2})/); [cite: 14, 19]
-    
-    if (dateMatch) {
-      const day = dateMatch[1].padStart(2, "0");
-      const month = months[dateMatch[2]];
-      const year = dateMatch[3];
-      const date = `${year}-${month}-${day}`;
+  // --- Custom CSV Lexer ---
+  const rows = [];
+  let currentRow = [];
+  let currentCell = "";
+  let inQuotes = false;
 
-      // Extract amount: Usually the last "R XX.XX" or "- R XX.XX" on the line
-      const amountMatch = line.match(/(-?\s?R[\d\s,.]+\.\d{2})\s*$/); [cite: 14, 19]
+  for (let i = 0; i < cleanText.length; i++) {
+    const char = cleanText[i];
+    if (inQuotes) {
+      if (char === '"' && cleanText[i + 1] === '"') {
+        currentCell += '"'; i++;
+      } else if (char === '"') {
+        inQuotes = false;
+      } else {
+        currentCell += char;
+      }
+    } else {
+      if (char === '"') inQuotes = true;
+      else if (char === ',') { currentRow.push(currentCell); currentCell = ""; }
+      else if (char === '\n') { 
+        currentRow.push(currentCell); 
+        rows.push(currentRow); 
+        currentRow = []; currentCell = ""; 
+      }
+      else currentCell += char;
+    }
+  }
+  if (currentCell || currentRow.length > 0) { currentRow.push(currentCell); rows.push(currentRow); }
+
+  // --- Unzip & Parse Transactions ---
+  for (let j = 0; j < rows.length; j++) {
+    const row = rows[j];
+    if (!row || row.length === 0) continue;
+
+    if (row[0]) {
+      const weirdDateMatch = row[0].match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(20\d{2})[\s\n]+(\d{1,2})/);
+      if (weirdDateMatch) {
+        row[0] = row[0].replace(weirdDateMatch[0], `${weirdDateMatch[3]} ${weirdDateMatch[1]} ${weirdDateMatch[2]}`);
+      }
+    }
+
+    const splitCells = row.map(cell => cell ? cell.split('\n').map(c => c.trim()) : []);
+    const maxLines = Math.max(1, ...splitCells.map(c => c.length));
+    
+    for (let i = 0; i < maxLines; i++) {
+      const newRow = splitCells.map(c => (c[i] !== undefined ? c[i] : ""));
       
-      if (amountMatch) {
-        const amountStr = amountMatch[1];
-        const amount = parseMoney(amountStr);
+      if (newRow.some(cell => cell !== "")) {
+        const dateMatch = newRow[0]?.match(/^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(20\d{2})/);
         
-        // Description is everything between the date and the amount
-        let description = line
-          .replace(dateMatch[0], "")
-          .replace(amountStr, "")
-          .replace(/,/g, " ")
-          .trim();
+        if (dateMatch) {
+          const day = dateMatch[1].padStart(2, "0");
+          const month = months[dateMatch[2]];
+          const year = dateMatch[3];
+          const date = `${year}-${month}-${day}`;
 
-        // Handle multi-line descriptions (peek at next line)
-        if (i + 1 < lines.length) {
-          const nextLine = lines[i + 1];
-          // If next line doesn't start with a date, amount, or "Closing balance", it's a sub-description
-          if (!nextLine.match(/^\d{1,2}\s+\w+/) && !nextLine.match(/R\d/) && !nextLine.includes("balance")) {
-            description += " " + nextLine;
-            i++; 
+          let amountStr = newRow[newRow.length - 1];
+          if (!amountStr || !amountStr.match(/R[\d\s,.]+/)) {
+            amountStr = newRow[newRow.length - 2]; 
+          }
+
+          if (amountStr && amountStr.match(/R[\d\s,.]+/)) {
+            const amount = parseMoney(amountStr);
+            
+            let description = newRow.slice(1, -1)
+                .filter(col => col && !col.startsWith("***") && !col.match(/R[\d\s,.]+/))
+                .join(" ")
+                .trim();
+
+            runningBalance = Number((runningBalance + amount).toFixed(2));
+
+            transactions.push({
+              date,
+              description: description.toUpperCase() || "UNKNOWN",
+              amount,
+              balance: runningBalance,
+              account: accountNumber,
+              clientName,
+              bankName: "Discovery",
+              sourceFile
+            });
           }
         }
-
-        runningBalance = Number((runningBalance + amount).toFixed(2));
-
-        transactions.push({
-          date,
-          description: description.toUpperCase().replace(/\s+/g, " "),
-          amount,
-          balance: runningBalance,
-          account: accountNumber,
-          clientName,
-          bankName: "Discovery",
-          sourceFile
-        });
       }
     }
   }
@@ -85,7 +124,6 @@ export function parseDiscovery(text, sourceFile = "") {
 
 function parseMoney(val) {
   if (!val) return 0;
-  // Remove currency, commas, and spaces; handle negative sign correctly
   const clean = val.replace(/[R,\s]/g, "");
   return parseFloat(clean) || 0;
 }
