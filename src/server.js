@@ -13,6 +13,7 @@ import pool from "./config/db.js";
 
 import authRoutes from "./routes/auth.routes.js";
 import usageRoutes from "./routes/usage.routes.js";
+import billingRoutes from "./routes/billing.routes.js";
 
 import { authenticateUser } from "./middleware/auth.middleware.js";
 import { checkPlanAccess } from "./middleware/credits.middleware.js";
@@ -91,13 +92,19 @@ app.get("/pricing", (req, res) => {
 app.use("/auth", authRoutes);
 
 /* ============================
-   USAGE ROUTES
+   USAGE ROUTES (if still needed)
 ============================ */
 
 app.use("/usage", usageRoutes);
 
 /* ============================
-   PARSE ROUTE
+   BILLING ROUTES
+============================ */
+
+app.use("/billing", billingRoutes);
+
+/* ============================
+   PARSE ROUTE (Billing Integrated)
 ============================ */
 
 const upload = multer({
@@ -118,6 +125,7 @@ app.post(
   upload.any(),
   async (req, res) => {
     try {
+      const user = req.userRecord;
       const files = req.files || [];
 
       if (files.length === 0) {
@@ -142,6 +150,39 @@ app.post(
 
         allTransactions = [...allTransactions, ...standardized];
       }
+
+      /* ================================
+         CREDIT DEDUCTION
+      ================================= */
+
+      if (user.plan_code === "FREE") {
+        await pool.query(
+          `UPDATE users
+           SET lifetime_parses_used = lifetime_parses_used + 1
+           WHERE id = $1`,
+          [user.id]
+        );
+      } 
+      else if (user.plan_code !== "PRO_YEAR_UNLIMITED") {
+        await pool.query(
+          `UPDATE users
+           SET credits_remaining = credits_remaining - 1
+           WHERE id = $1`,
+          [user.id]
+        );
+      }
+
+      await pool.query(
+        `INSERT INTO usage_logs
+         (user_id, action, plan_code, credits_deducted)
+         VALUES ($1, $2, $3, $4)`,
+        [
+          user.id,
+          "parse_statement",
+          user.plan_code,
+          user.plan_code === "PRO_YEAR_UNLIMITED" ? 0 : 1
+        ]
+      );
 
       res.json(allTransactions);
 
