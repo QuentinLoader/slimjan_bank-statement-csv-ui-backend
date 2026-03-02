@@ -17,7 +17,7 @@ router.post(
     try {
       const files = req.files || [];
 
-      if (files.length === 0) {
+      if (!files.length) {
         return res.status(400).json({ error: "No files uploaded" });
       }
 
@@ -48,7 +48,7 @@ router.post(
             rawTransactions = result;
           }
 
-          if (rawTransactions.length === 0) {
+          if (!rawTransactions.length) {
             continue;
           }
 
@@ -72,14 +72,15 @@ router.post(
         }
       }
 
-      if (!successfulParse || allTransactions.length === 0) {
+      if (!successfulParse || !allTransactions.length) {
         return res.status(422).json({
           error: "Parsing failed or no transactions detected",
         });
       }
 
+      // ✅ Deduct credit only after successful extraction
       try {
-        await deductUserCredit(req.user);
+        await deductUserCredit(req.billingUser);
       } catch (billingError) {
         console.error("Credit deduction failed:", billingError);
         return res.status(500).json({ error: "Billing error" });
