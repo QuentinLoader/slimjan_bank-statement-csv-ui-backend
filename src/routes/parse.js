@@ -1,4 +1,5 @@
 console.log("🔥 ROUTE FILE ACTIVE:", import.meta.url);
+
 import express from "express";
 import multer from "multer";
 import rateLimit from "express-rate-limit";
@@ -83,35 +84,70 @@ router.post(
       }
 
       // ===============================
-      // CREDIT DEDUCTION
+      // 🔐 ATOMIC BILLING SECTION
       // ===============================
 
+      let creditsDeducted = 0;
+
+      // FREE plan — atomic lifetime limit protection
       if (user.plan_code === "FREE") {
-        await pool.query(
-          `UPDATE users
-           SET lifetime_parses_used = lifetime_parses_used + 1
-           WHERE id = $1`,
+        const freeResult = await pool.query(
+          `
+          UPDATE users
+          SET lifetime_parses_used = lifetime_parses_used + 1
+          WHERE id = $1
+          AND lifetime_parses_used < 15
+          RETURNING lifetime_parses_used
+          `,
           [user.id]
         );
-      } 
-      else if (user.plan_code !== "PRO_YEAR_UNLIMITED") {
-        await pool.query(
-          `UPDATE users
-           SET credits_remaining = credits_remaining - 1
-           WHERE id = $1`,
-          [user.id]
-        );
+
+        if (freeResult.rowCount === 0) {
+          return res.status(403).json({
+            code: "FREE_LIMIT_REACHED",
+            message: "Free lifetime limit reached."
+          });
+        }
+
+        creditsDeducted = 1;
       }
 
+      // CREDIT BASED PLANS — atomic deduction
+      else if (user.plan_code !== "PRO_YEAR_UNLIMITED") {
+        const deductionResult = await pool.query(
+          `
+          UPDATE users
+          SET credits_remaining = credits_remaining - 1
+          WHERE id = $1
+          AND credits_remaining > 0
+          RETURNING credits_remaining
+          `,
+          [user.id]
+        );
+
+        if (deductionResult.rowCount === 0) {
+          return res.status(403).json({
+            code: "CREDITS_EXHAUSTED",
+            message: "No credits remaining."
+          });
+        }
+
+        creditsDeducted = 1;
+      }
+
+      // PRO_YEAR_UNLIMITED → no deduction
+
       await pool.query(
-        `INSERT INTO usage_logs
-         (user_id, action, plan_code, credits_deducted)
-         VALUES ($1, $2, $3, $4)`,
+        `
+        INSERT INTO usage_logs
+        (user_id, action, plan_code, credits_deducted)
+        VALUES ($1, $2, $3, $4)
+        `,
         [
           user.id,
           "parse_statement",
           user.plan_code,
-          user.plan_code === "PRO_YEAR_UNLIMITED" ? 0 : 1
+          creditsDeducted
         ]
       );
 
