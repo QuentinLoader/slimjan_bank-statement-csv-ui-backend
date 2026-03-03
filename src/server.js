@@ -2,7 +2,7 @@
 // 🔥 SERVER BUILD
 // ==========================================
 
-console.log("🔥 SERVER BUILD ID: 2026-03-03-OZOW-STABLE-CORS-FIX");
+console.log("🔥 SERVER BUILD ID: 2026-03-03-OZOW-STABLE-CORS-FIX-V2");
 
 import dotenv from "dotenv";
 dotenv.config();
@@ -24,25 +24,24 @@ import { router as parseRoute } from "./routes/parse.js";
 import { PRICING } from "./config/pricing.js";
 
 const app = express();
-
 app.set("trust proxy", 1);
 
 /* =========================================
-   CORS (MUST BE EARLY)
+   CORS (MUST BE FIRST MIDDLEWARE)
 ========================================= */
-
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  "https://youscan.addvision.co.za"
-];
 
 app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
 
+      // Production frontend
+      if (origin === "https://youscan.addvision.co.za") {
+        return callback(null, true);
+      }
+
+      // Lovable preview domains
       if (
-        allowedOrigins.includes(origin) ||
         origin.endsWith(".lovable.app") ||
         origin.endsWith(".lovableproject.com")
       ) {
@@ -50,14 +49,17 @@ app.use(
       }
 
       console.warn("Blocked by CORS:", origin);
-      return callback(new Error("Not allowed by CORS"));
+
+      // DO NOT throw error — just reject
+      return callback(null, false);
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true
+    credentials: true,
   })
 );
 
+// Proper preflight support
 app.options("*", cors());
 
 /* =========================================
@@ -88,8 +90,9 @@ app.use(express.json());
 app.use("/billing", ozowPaymentRoutes);
 
 /* =========================================
-   OTHER ROUTES
+   CORE ROUTES
 ========================================= */
+
 app.get("/", (req, res) =>
   res.send("YouScan Engine: Production Billing Active")
 );
