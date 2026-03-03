@@ -3,6 +3,7 @@ console.log("🔥 SERVER BUILD ID: 2026-03-02-CLEAN-PARSE");
 import dotenv from "dotenv";
 dotenv.config();
 
+import { router as ozowWebhook } from "./routes/ozow.webhook.js";
 import helmet from "helmet";
 import express from "express";
 import cors from "cors";
@@ -24,7 +25,7 @@ import { PRICING } from "./config/pricing.js";
 const app = express();
 
 app.set("trust proxy", 1);
-
+app.use("/ozow/webhook", ozowWebhook);
 app.use(helmet());
 
 const globalLimiter = rateLimit({
