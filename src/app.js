@@ -5,21 +5,31 @@ import cors from "cors";
 import { router as healthRoute } from "./routes/health.js";
 import { router as parseRoute } from "./routes/parse.js";
 import { router as exportRoute } from "./routes/export.js";
-import usageRoutes from './routes/usage.routes.js';
+import usageRoutes from "./routes/usage.routes.js";
+import ozowWebhook from "./webhooks/ozow.webhook.js";
 
 const app = express();
+
+/**
+ * =========================================
+ * OZOW WEBHOOK (MUST BE BEFORE JSON PARSER)
+ * =========================================
+ * This allows raw body parsing for hash verification
+ */
+app.use("/ozow/webhook", ozowWebhook);
 
 /**
  * MIDDLEWARE
  */
 app.use(express.json());
 
-// FIXED: Changed origin to "*" to prevent Vercel blocking
-app.use(cors({ 
-  origin: "*", 
-  methods: ["GET", "POST"],
-  credentials: true 
-}));
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST"],
+    credentials: true,
+  })
+);
 
 /**
  * ROUTES
@@ -27,7 +37,7 @@ app.use(cors({
 app.use("/health", healthRoute);
 app.use("/parse", parseRoute);
 app.use("/export", exportRoute);
-app.use('/usage', usageRoutes);
+app.use("/usage", usageRoutes);
 
 /**
  * ERROR HANDLING
@@ -35,7 +45,7 @@ app.use('/usage', usageRoutes);
 app.use((req, res) => {
   res.status(404).json({
     error: "NOT_FOUND",
-    message: `The endpoint ${req.originalUrl} does not exist on this server.`
+    message: `The endpoint ${req.originalUrl} does not exist on this server.`,
   });
 });
 
@@ -43,7 +53,7 @@ app.use((err, req, res, next) => {
   console.error("Global Error:", err.stack);
   res.status(500).json({
     error: "INTERNAL_SERVER_ERROR",
-    message: "Something went wrong on our end."
+    message: "Something went wrong on our end.",
   });
 });
 
