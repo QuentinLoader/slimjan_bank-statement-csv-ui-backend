@@ -41,7 +41,7 @@ router.post(
 
       const siteCode = process.env.OZOW_SITE_CODE;
       const privateKey = process.env.OZOW_PRIVATE_KEY;
-      const isTest = "false";
+      const isTest = "true";
 
       if (!siteCode || !privateKey) {
         return res.status(500).json({ error: "Payment configuration error" });
