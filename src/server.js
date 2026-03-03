@@ -21,10 +21,17 @@ import usageRoutes from "./routes/usage.routes.js";
 import billingRoutes from "./routes/billing.routes.js";
 import { router as parseRoute } from "./routes/parse.js";
 import { PRICING } from "./config/pricing.js";
+import ozowPaymentRoutes from "./routes/ozow.payment.routes.js";
 
 const app = express();
 
 app.set("trust proxy", 1);
+
+/* =========================================
+   OZOW PAYMENT ROUTES (RAW BODY SAFE)
+   ========================================= */
+app.use("/billing", ozowPaymentRoutes);
+
 
 /* =========================================
    OZOW WEBHOOK (RAW BODY SAFE)
