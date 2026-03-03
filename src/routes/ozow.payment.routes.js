@@ -48,18 +48,21 @@ router.post(
         return res.status(500).json({ error: "Payment configuration error" });
       }
 
+      const isTest = "false";
+
       const stringToHash =
-        siteCode +
-        "ZA" +
-        PRICING.currency +
-        amount +
-        transactionReference +
-        bankReference +
-        cancelUrl +
-        errorUrl +
-        successUrl +
-        notifyUrl +
-        privateKey;
+      siteCode +
+      "ZA" +
+      PRICING.currency +
+      amount +
+      transactionReference +
+      bankReference +
+      cancelUrl +
+      errorUrl +
+      successUrl +
+      notifyUrl +
+      isTest +
+      privateKey;
 
       const hashCheck = crypto
         .createHash("sha512")
