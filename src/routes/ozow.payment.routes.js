@@ -16,7 +16,7 @@ router.post(
         return res.status(400).json({ error: "Plan code required" });
       }
 
-      const plan = PRICING[planCode];
+      const plan = PRICING.PLANS[planCode];
 
       if (!plan) {
         return res.status(400).json({ error: "Invalid plan" });
@@ -24,7 +24,7 @@ router.post(
 
       const user = req.userRecord;
 
-      const amount = Number(plan.price).toFixed(2);
+      const amount = (plan.price_cents / 100).toFixed(2);
 
       const transactionReference = `${user.id}_${planCode}_${Date.now()}`;
       const bankReference = `YOUSCAN-${Date.now()}`;
@@ -41,7 +41,7 @@ router.post(
       const stringToHash =
         siteCode +
         "ZA" +
-        "ZAR" +
+        PRICING.currency +
         amount +
         transactionReference +
         bankReference +
@@ -62,7 +62,7 @@ router.post(
             <form method="post" action="https://pay.ozow.com">
               <input type="hidden" name="SiteCode" value="${siteCode}" />
               <input type="hidden" name="CountryCode" value="ZA" />
-              <input type="hidden" name="CurrencyCode" value="ZAR" />
+              <input type="hidden" name="CurrencyCode" value="${PRICING.currency}" />
               <input type="hidden" name="Amount" value="${amount}" />
               <input type="hidden" name="TransactionReference" value="${transactionReference}" />
               <input type="hidden" name="BankReference" value="${bankReference}" />
