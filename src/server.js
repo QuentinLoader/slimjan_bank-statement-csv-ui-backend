@@ -3,7 +3,7 @@ console.log("🔥 SERVER BUILD ID: 2026-03-02-CLEAN-PARSE");
 import dotenv from "dotenv";
 dotenv.config();
 
-import { router as ozowWebhook } from "./routes/ozow.webhook.js";
+import ozowWebhook from "./webhooks/ozow.webhook.js";
 import helmet from "helmet";
 import express from "express";
 import cors from "cors";
