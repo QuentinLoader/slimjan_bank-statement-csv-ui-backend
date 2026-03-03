@@ -4,10 +4,9 @@ import { authenticateUser } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
-/**
- * GET /billing/status
- * Returns current user's billing status
- */
+/* ============================
+   GET BILLING STATUS
+============================ */
 router.get("/status", authenticateUser, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -28,9 +27,7 @@ router.get("/status", authenticateUser, async (req, res) => {
     const user = rows[0];
 
     if (!user) {
-      return res.status(404).json({
-        code: "USER_NOT_FOUND"
-      });
+      return res.status(404).json({ code: "USER_NOT_FOUND" });
     }
 
     const now = new Date();
@@ -39,23 +36,14 @@ router.get("/status", authenticateUser, async (req, res) => {
     let creditsRemaining = null;
     let subscriptionActive = true;
 
-    /* =============================
-       FREE
-    ============================= */
     if (user.plan_code === "FREE") {
       lifetimeRemaining = Math.max(0, 15 - user.lifetime_parses_used);
     }
 
-    /* =============================
-       PAYG_10
-    ============================= */
     if (user.plan_code === "PAYG_10") {
       creditsRemaining = user.credits_remaining;
     }
 
-    /* =============================
-       MONTHLY_25
-    ============================= */
     if (user.plan_code === "MONTHLY_25") {
       creditsRemaining = user.credits_remaining;
 
@@ -67,9 +55,6 @@ router.get("/status", authenticateUser, async (req, res) => {
       }
     }
 
-    /* =============================
-       PRO_YEAR_UNLIMITED
-    ============================= */
     if (user.plan_code === "PRO_YEAR_UNLIMITED") {
       if (
         !user.renewal_date ||
@@ -91,9 +76,78 @@ router.get("/status", authenticateUser, async (req, res) => {
 
   } catch (err) {
     console.error("Billing status error:", err);
-    return res.status(500).json({
-      code: "BILLING_STATUS_FAILED"
-    });
+    return res.status(500).json({ code: "BILLING_STATUS_FAILED" });
+  }
+});
+
+/* ============================
+   OZOW WEBHOOK (IDEMPOTENT)
+============================ */
+router.post("/webhook", async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const {
+      TransactionReference,
+      Status,
+      Amount,
+      CustomField1 // assume this is userId
+    } = req.body;
+
+    if (!TransactionReference || !CustomField1) {
+      return res.status(400).send("Invalid webhook");
+    }
+
+    // Only process successful payments
+    if (Status !== "Complete") {
+      return res.status(200).send("Ignored");
+    }
+
+    await client.query("BEGIN");
+
+    // Idempotency check
+    const existing = await client.query(
+      `SELECT id FROM payments WHERE reference = $1`,
+      [TransactionReference]
+    );
+
+    if (existing.rowCount > 0) {
+      await client.query("ROLLBACK");
+      return res.status(200).send("Already processed");
+    }
+
+    const userId = CustomField1;
+
+    // Example: Activate PAYG_10
+    await client.query(
+      `
+      UPDATE users
+      SET plan_code = 'PAYG_10',
+          credits_remaining = 10
+      WHERE id = $1
+      `,
+      [userId]
+    );
+
+    await client.query(
+      `
+      INSERT INTO payments
+      (user_id, reference, plan_code, amount, status)
+      VALUES ($1, $2, $3, $4, $5)
+      `,
+      [userId, TransactionReference, "PAYG_10", Amount, "Complete"]
+    );
+
+    await client.query("COMMIT");
+
+    return res.status(200).send("OK");
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("WEBHOOK ERROR:", err);
+    return res.status(500).send("Webhook failed");
+  } finally {
+    client.release();
   }
 });
 
