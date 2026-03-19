@@ -22,7 +22,7 @@ router.post(
         TransactionReference,
         Amount,
         Status,
-        HashCheck
+        Hash
       } = payload;
 
       // ✅ Basic validation
@@ -48,10 +48,10 @@ router.post(
         .digest("hex");
 
       console.log("GENERATED HASH:", generatedHash);
-      console.log("OZOW HASH:", HashCheck);
+      console.log("OZOW HASH:", Hash);
 
       // ✅ Verify signature
-      if (generatedHash !== HashCheck) {
+      if (generatedHash !== Hash) {
         console.error("Hash mismatch ❌");
         return res.status(400).send("Invalid signature");
       }
