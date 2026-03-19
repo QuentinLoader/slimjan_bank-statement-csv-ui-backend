@@ -1,7 +1,7 @@
 import express from "express";
-import crypto from "crypto";
 import { authenticateUser } from "../middleware/auth.middleware.js";
 import { PRICING } from "../config/pricing.js";
+import { generateOzowHash } from "../utils/ozowHash.js";
 
 const router = express.Router();
 
@@ -28,6 +28,7 @@ router.post(
         return res.status(401).json({ error: "Unauthorized" });
       }
 
+      // ✅ Amount MUST be string with 2 decimals
       const amount = (plan.price_cents / 100).toFixed(2);
 
       const transactionReference = `${user.userId}_${planCode}_${Date.now()}`;
@@ -41,49 +42,52 @@ router.post(
 
       const siteCode = process.env.OZOW_SITE_CODE;
       const privateKey = process.env.OZOW_PRIVATE_KEY;
-      const isTest = "false";
+
+      // 🔴 IMPORTANT: must be STRING
+      const isTest = "false"; // change to "true" if testing
 
       if (!siteCode || !privateKey) {
         return res.status(500).json({ error: "Payment configuration error" });
       }
 
-      // 🔥 CRITICAL: EXACT ORDER REQUIRED BY OZOW
-      const stringToHash =
-        siteCode +
-        "ZA" +
-        PRICING.currency +
-        amount +
-        transactionReference +
-        bankReference +
-        cancelUrl +
-        errorUrl +
-        successUrl +
-        notifyUrl +
-        privateKey;
-        
-console.log("STRING TO HASH:");
-console.log(stringToHash);
+      // ✅ Build payload object EXACTLY as Ozow expects
+      const payload = {
+        SiteCode: siteCode,
+        CountryCode: "ZA",
+        CurrencyCode: PRICING.currency,
+        Amount: amount,
+        TransactionReference: transactionReference,
+        BankReference: bankReference,
+        CancelURL: cancelUrl,
+        ErrorURL: errorUrl,
+        SuccessURL: successUrl,
+        NotifyURL: notifyUrl,
+        IsTest: isTest,
+      };
 
-      const hashCheck = crypto
-        .createHash("sha512")
-        .update(stringToHash)
-        .digest("hex");
+      // ✅ Generate hash (correct order handled in utility)
+      const hashCheck = generateOzowHash(payload, privateKey);
 
+      // 🧪 Debug logs (keep for now)
+      console.log("OZOW PAYMENT PAYLOAD:", payload);
+      console.log("OZOW HASH:", hashCheck);
+
+      // ✅ Build auto-submit form
       const paymentForm = `
         <html>
           <body onload="document.forms[0].submit()">
             <form method="post" action="https://pay.ozow.com">
-              <input type="hidden" name="SiteCode" value="${siteCode}" />
-              <input type="hidden" name="CountryCode" value="ZA" />
-              <input type="hidden" name="CurrencyCode" value="${PRICING.currency}" />
-              <input type="hidden" name="Amount" value="${amount}" />
-              <input type="hidden" name="TransactionReference" value="${transactionReference}" />
-              <input type="hidden" name="BankReference" value="${bankReference}" />
-              <input type="hidden" name="CancelURL" value="${cancelUrl}" />
-              <input type="hidden" name="ErrorURL" value="${errorUrl}" />
-              <input type="hidden" name="SuccessURL" value="${successUrl}" />
-              <input type="hidden" name="NotifyURL" value="${notifyUrl}" />
-              <input type="hidden" name="IsTest" value="${isTest}" />
+              <input type="hidden" name="SiteCode" value="${payload.SiteCode}" />
+              <input type="hidden" name="CountryCode" value="${payload.CountryCode}" />
+              <input type="hidden" name="CurrencyCode" value="${payload.CurrencyCode}" />
+              <input type="hidden" name="Amount" value="${payload.Amount}" />
+              <input type="hidden" name="TransactionReference" value="${payload.TransactionReference}" />
+              <input type="hidden" name="BankReference" value="${payload.BankReference}" />
+              <input type="hidden" name="CancelURL" value="${payload.CancelURL}" />
+              <input type="hidden" name="ErrorURL" value="${payload.ErrorURL}" />
+              <input type="hidden" name="SuccessURL" value="${payload.SuccessURL}" />
+              <input type="hidden" name="NotifyURL" value="${payload.NotifyURL}" />
+              <input type="hidden" name="IsTest" value="${payload.IsTest}" />
               <input type="hidden" name="HashCheck" value="${hashCheck}" />
             </form>
           </body>
@@ -91,7 +95,6 @@ console.log(stringToHash);
       `;
 
       res.send(paymentForm);
-
     } catch (err) {
       console.error("CREATE OZOW PAYMENT ERROR:", err);
       res.status(500).json({ error: "Failed to create payment" });
