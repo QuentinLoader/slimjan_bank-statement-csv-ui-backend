@@ -1,9 +1,39 @@
 import express from "express";
 import { authenticateUser } from "../middleware/auth.middleware.js";
 import { PRICING } from "../config/pricing.js";
-import { generateOzowHash } from "../utils/ozowHash.js";
+import crypto from "crypto";
 
 const router = express.Router();
+
+// ✅ STRICT Ozow payment request hash (CORRECT ORDER)
+function generateOzowRequestHash(data, privateKey) {
+  const parts = [
+    data.SiteCode,
+    data.CountryCode,
+    data.CurrencyCode,
+    data.Amount,
+    data.TransactionReference,
+    data.BankReference,
+    data.CancelURL,
+    data.ErrorURL,
+    data.SuccessURL,
+    data.NotifyURL,
+    data.IsTest,
+    privateKey
+  ];
+
+  const hashString = parts
+    .map(v => (v === undefined || v === null ? "" : String(v)))
+    .join("");
+
+  console.log("REQUEST HASH STRING:", JSON.stringify(hashString));
+
+  return crypto
+    .createHash("sha512")
+    .update(hashString, "utf-8")
+    .digest("hex")
+    .toLowerCase();
+}
 
 router.post(
   "/create-ozow-payment",
@@ -28,32 +58,23 @@ router.post(
         return res.status(401).json({ error: "Unauthorized" });
       }
 
-      // ✅ Amount MUST be string with 2 decimals
-      const amount = (plan.price_cents / 100).toFixed(2);
-
-      const transactionReference = `${user.userId}_${planCode}_${Date.now()}`;
-
-      // ✅ FIXED: always < 20 chars
-      const bankReference = `YS-${Date.now().toString().slice(-10)}`;
-      console.log("BankReference:", bankReference, "Length:", bankReference.length);
-
-      const successUrl = "https://youscan.addvision.co.za/payment-return";
-      const cancelUrl = "https://youscan.addvision.co.za/payment-cancelled";
-      const errorUrl = "https://youscan.addvision.co.za/payment-error";
-      const notifyUrl =
-        "https://youscan-statement-csv-ui-backend-production.up.railway.app/ozow/webhook";
-
       const siteCode = process.env.OZOW_SITE_CODE;
       const privateKey = process.env.OZOW_PRIVATE_KEY;
-
-      // 🔴 MUST be string
-      const isTest = "true";
 
       if (!siteCode || !privateKey) {
         return res.status(500).json({ error: "Payment configuration error" });
       }
 
-      // ✅ FORCE ALL VALUES TO STRING (critical for Ozow hash consistency)
+      // ✅ Amount MUST be string with 2 decimals
+      const amount = (plan.price_cents / 100).toFixed(2);
+
+      // ✅ Transaction reference (used later in webhook)
+      const transactionReference = `${user.userId}_${planCode}_${Date.now()}`;
+
+      // ✅ Bank reference (max 20 chars)
+      const bankReference = `YS-${Date.now().toString().slice(-10)}`;
+      console.log("BankReference:", bankReference, "Length:", bankReference.length);
+
       const payload = {
         SiteCode: String(siteCode).trim(),
         CountryCode: "ZA",
@@ -61,23 +82,24 @@ router.post(
         Amount: String(amount).trim(),
         TransactionReference: String(transactionReference).trim(),
         BankReference: String(bankReference).trim(),
-        CancelURL: String(cancelUrl).trim(),
-        ErrorURL: String(errorUrl).trim(),
-        SuccessURL: String(successUrl).trim(),
-        NotifyURL: String(notifyUrl).trim(),
-        IsTest: String(isTest).trim(),
+        CancelURL: "https://youscan.addvision.co.za/payment-cancelled",
+        ErrorURL: "https://youscan.addvision.co.za/payment-error",
+        SuccessURL: "https://youscan.addvision.co.za/payment-return",
+        NotifyURL:
+          "https://youscan-statement-csv-ui-backend-production.up.railway.app/ozow/webhook",
+        IsTest: "true", // ✅ MUST be lowercase for request
       };
 
-      // 🔍 DEBUG — EXACT values used
+      // 🔍 DEBUG — exact payload
       console.log("FORM VALUES:");
       console.log(JSON.stringify(payload, null, 2));
 
-      // ✅ Generate hash using SAME payload
-      const hashCheck = generateOzowHash(payload, privateKey);
+      // ✅ Generate hash
+      const hashCheck = generateOzowRequestHash(payload, privateKey);
 
-      console.log("OZOW HASH:", hashCheck);
+      console.log("OZOW REQUEST HASH:", hashCheck);
 
-      // ✅ Build auto-submit form using SAME payload
+      // ✅ Auto-submit form
       const paymentForm = `
         <html>
           <body onload="document.forms[0].submit()">
@@ -99,10 +121,11 @@ router.post(
         </html>
       `;
 
-      res.send(paymentForm);
+      return res.send(paymentForm);
+
     } catch (err) {
       console.error("CREATE OZOW PAYMENT ERROR:", err);
-      res.status(500).json({ error: "Failed to create payment" });
+      return res.status(500).json({ error: "Failed to create payment" });
     }
   }
 );
