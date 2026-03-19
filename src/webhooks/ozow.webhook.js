@@ -5,17 +5,22 @@ import crypto from "crypto";
 
 const router = express.Router();
 
-// ✅ CORRECT Ozow webhook hash (FINAL)
+// 🔥 CRITICAL FIX: Normalize amount (Ozow removes trailing zeros)
+function normalizeAmount(amount) {
+  return parseFloat(amount).toString();
+}
+
+// ✅ Ozow webhook hash (correct for your setup)
 function generateOzowWebhookHash(data, privateKey) {
   const hashString =
     String(data.SiteCode).trim() +
     String(data.TransactionId).trim() +
     String(data.TransactionReference).trim() +
-    String(data.Amount).trim() +
+    normalizeAmount(data.Amount) + // 🔥 FIX HERE
     String(data.Status).trim() +
     String(privateKey).trim();
 
-  console.log("WEBHOOK HASH STRING:", hashString);
+  console.log("WEBHOOK HASH STRING:", JSON.stringify(hashString));
 
   return crypto
     .createHash("sha512")
@@ -43,7 +48,9 @@ router.post(
         Hash
       } = payload;
 
-      // ✅ Validate site
+      // =========================
+      // ✅ 1. VALIDATE SITE
+      // =========================
       if (SiteCode !== process.env.OZOW_SITE_CODE) {
         console.error("❌ Invalid SiteCode");
         return res.status(400).send("Invalid site");
@@ -54,7 +61,9 @@ router.post(
         return res.status(400).send("Missing hash");
       }
 
-      // ✅ Verify hash
+      // =========================
+      // ✅ 2. VERIFY HASH
+      // =========================
       const generatedHash = generateOzowWebhookHash(
         payload,
         process.env.OZOW_PRIVATE_KEY
@@ -72,15 +81,20 @@ router.post(
 
       console.log("✅ Hash verified");
 
-      // ✅ Only process successful payments
+      // =========================
+      // ✅ 3. ONLY PROCESS SUCCESS
+      // =========================
       if (Status !== "Complete") {
-        console.log("⏳ Ignoring:", Status);
+        console.log("⏳ Ignoring status:", Status);
         return res.status(200).send("Ignored");
       }
 
-      console.log("💰 Payment success:", TransactionReference);
+      console.log("💰 Payment successful:", TransactionReference);
 
-      // 🚀 NEXT STEP: billing logic
+      // =========================
+      // 🚀 4. BILLING PLACEHOLDER
+      // =========================
+      // TODO:
       // await applyBilling(TransactionReference, Amount);
 
       return res.status(200).send("OK");
