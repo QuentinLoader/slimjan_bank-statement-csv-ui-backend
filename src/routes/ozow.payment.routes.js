@@ -32,6 +32,8 @@ router.post(
       const amount = (plan.price_cents / 100).toFixed(2);
 
       const transactionReference = `${user.userId}_${planCode}_${Date.now()}`;
+
+      // ✅ FIXED: always < 20 chars
       const bankReference = `YS-${Date.now().toString().slice(-10)}`;
       console.log("BankReference:", bankReference, "Length:", bankReference.length);
 
@@ -44,36 +46,38 @@ router.post(
       const siteCode = process.env.OZOW_SITE_CODE;
       const privateKey = process.env.OZOW_PRIVATE_KEY;
 
-      // 🔴 IMPORTANT: must be STRING
-      const isTest = "true"; // change to "true" if testing
+      // 🔴 MUST be string
+      const isTest = "true";
 
       if (!siteCode || !privateKey) {
         return res.status(500).json({ error: "Payment configuration error" });
       }
 
-      // ✅ Build payload object EXACTLY as Ozow expects
+      // ✅ FORCE ALL VALUES TO STRING (critical for Ozow hash consistency)
       const payload = {
-        SiteCode: siteCode,
+        SiteCode: String(siteCode).trim(),
         CountryCode: "ZA",
-        CurrencyCode: PRICING.currency,
-        Amount: amount,
-        TransactionReference: transactionReference,
-        BankReference: bankReference,
-        CancelURL: cancelUrl,
-        ErrorURL: errorUrl,
-        SuccessURL: successUrl,
-        NotifyURL: notifyUrl,
-        IsTest: isTest,
+        CurrencyCode: String(PRICING.currency).trim(),
+        Amount: String(amount).trim(),
+        TransactionReference: String(transactionReference).trim(),
+        BankReference: String(bankReference).trim(),
+        CancelURL: String(cancelUrl).trim(),
+        ErrorURL: String(errorUrl).trim(),
+        SuccessURL: String(successUrl).trim(),
+        NotifyURL: String(notifyUrl).trim(),
+        IsTest: String(isTest).trim(),
       };
 
-      // ✅ Generate hash (correct order handled in utility)
+      // 🔍 DEBUG — EXACT values used
+      console.log("FORM VALUES:");
+      console.log(JSON.stringify(payload, null, 2));
+
+      // ✅ Generate hash using SAME payload
       const hashCheck = generateOzowHash(payload, privateKey);
 
-      // 🧪 Debug logs (keep for now)
-      console.log("OZOW PAYMENT PAYLOAD:", payload);
       console.log("OZOW HASH:", hashCheck);
 
-      // ✅ Build auto-submit form
+      // ✅ Build auto-submit form using SAME payload
       const paymentForm = `
         <html>
           <body onload="document.forms[0].submit()">
