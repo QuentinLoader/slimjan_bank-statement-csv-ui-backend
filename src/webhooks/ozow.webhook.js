@@ -28,13 +28,16 @@ function buildHashFromRawBody(rawBody, privateKey) {
 
   hashString += privateKey;
 
-  console.log("RAW HASH STRING:", JSON.stringify(hashString));
+  // 🔴 THE FIX: Ozow requires the entire concatenated string to be lowercased BEFORE hashing.
+  const lowerCaseHashString = hashString.toLowerCase();
+
+  console.log("RAW HASH STRING (LOWERCASED):", JSON.stringify(lowerCaseHashString));
 
   return crypto
     .createHash("sha512")
-    .update(hashString, "utf-8")
+    .update(lowerCaseHashString, "utf-8")
     .digest("hex")
-    .toLowerCase();
+    .toLowerCase(); 
 }
 
 router.post("/", async (req, res) => {
