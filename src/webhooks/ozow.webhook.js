@@ -152,7 +152,7 @@ router.post(
 
       // 1) Ensure idempotency record exists
       // Recommended table:
-      // CREATE TABLE billing_transactions (
+      // CREATE TABLE ozow_transactions (
       //   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       //   provider TEXT NOT NULL,
       //   transaction_id TEXT NOT NULL UNIQUE,
@@ -173,7 +173,7 @@ router.post(
       const existingTx = await client.query(
         `
         SELECT id, status, processed_at
-        FROM billing_transactions
+        FROM ozow_transactions
         WHERE transaction_id = $1
         FOR UPDATE
         `,
@@ -183,7 +183,7 @@ router.post(
       if (existingTx.rowCount === 0) {
         await client.query(
           `
-          INSERT INTO billing_transactions (
+          INSERT INTO ozow_transactions (
             provider,
             transaction_id,
             transaction_reference,
@@ -215,7 +215,7 @@ router.post(
       } else {
         await client.query(
           `
-          UPDATE billing_transactions
+          UPDATE ozow_transactions
           SET
             status = $2,
             bank_reference = $3,
@@ -245,7 +245,7 @@ router.post(
       const processedCheck = await client.query(
         `
         SELECT processed_at
-        FROM billing_transactions
+        FROM ozow_transactions
         WHERE transaction_id = $1
         `,
         [TransactionId]
@@ -279,7 +279,7 @@ router.post(
       // 7) Mark processed
       await client.query(
         `
-        UPDATE billing_transactions
+        UPDATE ozow_transactions
         SET
           processed_at = NOW(),
           updated_at = NOW()
