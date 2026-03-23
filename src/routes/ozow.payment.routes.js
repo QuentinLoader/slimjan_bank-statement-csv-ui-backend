@@ -1,6 +1,5 @@
 import express from "express";
 import crypto from "crypto";
-import pool from "../config/db.js";
 
 const router = express.Router();
 
@@ -25,26 +24,31 @@ router.post("/create-ozow-payment", async (req, res) => {
     const siteCode = process.env.OZOW_SITE_CODE;
     const privateKey = process.env.OZOW_PRIVATE_KEY;
     
-    // 🔥 FIX 1: Extremely Safe Reference (15 chars max)
-    // Some bank gateways are even stricter than 20 chars.
-    const bankReference = `${userId}x${planCode}x${Math.floor(Date.now() / 10000)}`.substring(0, 15);
+    // 🔥 FIX 1: Super-safe Reference (15 chars)
+    // Some gateways trigger a 302 if the reference looks like a URL or has special chars.
+    const timestamp = Math.floor(Date.now() / 1000).toString().slice(-6);
+    const bankReference = `YZ${userId}X${timestamp}`.substring(0, 15);
     
+    // 🔥 FIX 2: Explicitly trim URLs to prevent hidden whitespace in Hash
+    const baseUrl = "https://youscan.addvision.co.za";
+    const notifyBase = "https://youscan-statement-csv-ui-backend-production.up.railway.app";
+
     const payload = {
-      SiteCode: siteCode,
+      SiteCode: siteCode.trim(),
       CountryCode: "ZA",
       CurrencyCode: "ZAR",
       Amount: parseFloat(amount).toFixed(2),
       TransactionReference: bankReference,
       BankReference: bankReference,
-      CancelUrl: `https://youscan.addvision.co.za/payment-cancelled`,
-      ErrorUrl: `https://youscan.addvision.co.za/payment-error`,
-      SuccessUrl: `https://youscan.addvision.co.za/payment-return`,
-      // 🔥 FIX 2: Removed trailing slashes and kept the URL as short as humanly possible.
-      NotifyUrl: `https://youscan-statement-csv-ui-backend-production.up.railway.app/ozow`,
-      // 🔥 FIX 3: Set to FALSE if you are using your real ADD-ADD-011 SiteCode.
-      IsTest: false 
+      CancelUrl: `${baseUrl}/payment-cancelled`.trim(),
+      ErrorUrl: `${baseUrl}/payment-error`.trim(),
+      SuccessUrl: `${baseUrl}/payment-return`.trim(),
+      NotifyUrl: `${notifyBase}/ozow`.trim(),
+      IsTest: false // Set to true ONLY if using an Ozow Sandbox SiteCode
     };
 
+    // Construct Hash String
+    // Note: IsTest must be stringified exactly as Ozow expects ('true' or 'false')
     const hashString = (
       payload.SiteCode + 
       payload.CountryCode + 
@@ -57,10 +61,12 @@ router.post("/create-ozow-payment", async (req, res) => {
       payload.SuccessUrl +
       payload.NotifyUrl + 
       payload.IsTest + 
-      privateKey
+      privateKey.trim()
     ).toLowerCase();
 
     const hash = crypto.createHash("sha512").update(hashString).digest("hex");
+
+    console.log(`✅ Gateway Request Initialized: ${bankReference}`);
 
     res.status(200).json({
       ...payload,
