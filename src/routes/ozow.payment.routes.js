@@ -14,12 +14,12 @@ function generateOzowRequestHash(data, privateKey) {
     data.TransactionReference,
     data.BankReference,
 
-    data.Optional1 ?? "",
-    data.Optional2 ?? "",
-    data.Optional3 ?? "",
-    data.Optional4 ?? "",
-    data.Optional5 ?? "",
-    data.Customer ?? "",
+    data.Optional1,
+    data.Optional2,
+    data.Optional3,
+    data.Optional4,
+    data.Optional5,
+    data.Customer,
 
     data.CancelURL,
     data.ErrorURL,
@@ -29,11 +29,18 @@ function generateOzowRequestHash(data, privateKey) {
     privateKey
   ];
 
-  const rawString = parts
-    .map(v => (v === undefined || v === null ? "" : String(v)))
-    .join("");
+  const normalizedParts = parts.map(v =>
+    v === undefined || v === null ? "" : String(v)
+  );
 
+  const rawString = normalizedParts.join("");
   const hashString = rawString.toLowerCase();
+
+  // 🔥 CRITICAL DEBUG (Step 1)
+  console.log("REQUEST HASH PARTS:");
+  normalizedParts.forEach((p, i) => {
+    console.log(`${i}: "${p}"`);
+  });
 
   console.log("REQUEST RAW STRING:", JSON.stringify(rawString));
   console.log("REQUEST HASH STRING:", JSON.stringify(hashString));
@@ -101,6 +108,7 @@ router.post(
         SuccessURL: "https://youscan.addvision.co.za/payment-return",
         NotifyURL:
           "https://youscan-statement-csv-ui-backend-production.up.railway.app/ozow/webhook",
+
         IsTest: "true"
       };
 
