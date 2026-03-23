@@ -44,7 +44,7 @@ router.post("/create-ozow-payment", async (req, res) => {
       ErrorUrl: `${baseUrl}/payment-error`.trim(),
       SuccessUrl: `${baseUrl}/payment-return`.trim(),
       NotifyUrl: `${notifyBase}/ozow`.trim(),
-      IsTest: true // Set to true ONLY if using an Ozow Sandbox SiteCode
+      IsTest: false // Set to true ONLY if using an Ozow Sandbox SiteCode
     };
 
     // Construct Hash String
