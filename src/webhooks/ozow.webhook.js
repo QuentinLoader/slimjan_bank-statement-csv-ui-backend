@@ -25,11 +25,13 @@ function generateOzowWebhookHash(data, privateKey) {
     privateKey
   ];
 
-  const hashString = parts
+  const rawString = parts
     .map(v => (v === undefined || v === null ? "" : String(v)))
-    .join("")
-    .toLowerCase();
+    .join("");
 
+  const hashString = rawString.toLowerCase();
+
+  console.log("WEBHOOK RAW STRING:", JSON.stringify(rawString));
   console.log("WEBHOOK HASH STRING:", JSON.stringify(hashString));
 
   return crypto
