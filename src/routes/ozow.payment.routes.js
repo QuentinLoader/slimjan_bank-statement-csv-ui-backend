@@ -26,7 +26,8 @@ router.post("/create-ozow-payment", async (req, res) => {
     const siteCode = process.env.OZOW_SITE_CODE;
     const privateKey = process.env.OZOW_PRIVATE_KEY;
     
-    // FIX 1: Shorten BankReference (SA Banks limit to 20 chars)
+    // 🔥 FIX 1: Shorten BankReference (SA Banks strictly limit to 20 chars)
+    // Using a Unix timestamp (seconds) keeps the string compact.
     const timestamp = Math.floor(Date.now() / 1000);
     const bankReference = `${userId}_${planCode}_${timestamp}`.substring(0, 20);
     
@@ -34,18 +35,19 @@ router.post("/create-ozow-payment", async (req, res) => {
       SiteCode: siteCode,
       CountryCode: "ZA",
       CurrencyCode: "ZAR",
-      Amount: parseFloat(amount).toFixed(2), // Strict 2-decimal formatting
+      Amount: parseFloat(amount).toFixed(2), // 🔥 FIX 2: Strict 2-decimal formatting for Hash matching
       TransactionReference: bankReference,
       BankReference: bankReference,
       CancelUrl: `https://youscan.addvision.co.za/payment-cancelled`,
       ErrorUrl: `https://youscan.addvision.co.za/payment-error`,
       SuccessUrl: `https://youscan.addvision.co.za/payment-return`,
-      // 🔥 FIX 2: Shortened NotifyUrl to bypass character limit validation
+      // 🔥 FIX 3: Shortened NotifyUrl to bypass Ozow's character limit validation
+      // This saves 8 characters compared to the previous version.
       NotifyUrl: `https://youscan-statement-csv-ui-backend-production.up.railway.app/ozow`,
       IsTest: true 
     };
 
-    // Construct Hash String (Order is critical for Ozow)
+    // Construct Hash String (Order is critical for Ozow Gateway)
     const hashString = (
       payload.SiteCode + 
       payload.CountryCode + 
@@ -63,7 +65,7 @@ router.post("/create-ozow-payment", async (req, res) => {
 
     const hash = crypto.createHash("sha512").update(hashString).digest("hex");
 
-    console.log(`✅ Final Optimized Payment Link Generated: ${bankReference}`);
+    console.log(`✅ Optimized Payment Link Generated: ${bankReference}`);
 
     res.status(200).json({
       ...payload,
