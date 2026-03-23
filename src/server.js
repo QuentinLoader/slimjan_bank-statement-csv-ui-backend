@@ -83,6 +83,25 @@ app.get("/", (req, res) => res.send("YouScan Engine: Billing Active"));
 app.get("/pricing", (req, res) => res.json(PRICING));
 
 /* =========================================
+   GET HEALTHROUTES
+========================================= */
+
+app.get("/health/routes", (req, res) => {
+  res.json({
+    ok: true,
+    routes: {
+      pricing: "/pricing",
+      billingCreateOzowPayment: "/billing/create-ozow-payment",
+      ozowWebhook: "/ozow/webhook",
+      parse: "/parse",
+      auth: "/auth",
+      usage: "/usage"
+    }
+  });
+});
+
+
+/* =========================================
    ERROR HANDLERS
 ========================================= */
 app.use((req, res) => {
