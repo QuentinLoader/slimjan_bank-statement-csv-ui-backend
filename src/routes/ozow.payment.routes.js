@@ -19,35 +19,32 @@ router.post("/create-ozow-payment", async (req, res) => {
     const amount = getPrice(planCode);
 
     if (!amount || !userId) {
-      console.error("❌ Validation Failed:", { planCode, userId });
       return res.status(400).json({ error: "INVALID_REQUEST_DATA" });
     }
 
     const siteCode = process.env.OZOW_SITE_CODE;
     const privateKey = process.env.OZOW_PRIVATE_KEY;
     
-    // 🔥 FIX 1: Shorten BankReference (SA Banks strictly limit to 20 chars)
-    // Using a Unix timestamp (seconds) keeps the string compact.
-    const timestamp = Math.floor(Date.now() / 1000);
-    const bankReference = `${userId}_${planCode}_${timestamp}`.substring(0, 20);
+    // 🔥 FIX 1: Extremely Safe Reference (15 chars max)
+    // Some bank gateways are even stricter than 20 chars.
+    const bankReference = `${userId}x${planCode}x${Math.floor(Date.now() / 10000)}`.substring(0, 15);
     
     const payload = {
       SiteCode: siteCode,
       CountryCode: "ZA",
       CurrencyCode: "ZAR",
-      Amount: parseFloat(amount).toFixed(2), // 🔥 FIX 2: Strict 2-decimal formatting for Hash matching
+      Amount: parseFloat(amount).toFixed(2),
       TransactionReference: bankReference,
       BankReference: bankReference,
       CancelUrl: `https://youscan.addvision.co.za/payment-cancelled`,
       ErrorUrl: `https://youscan.addvision.co.za/payment-error`,
       SuccessUrl: `https://youscan.addvision.co.za/payment-return`,
-      // 🔥 FIX 3: Shortened NotifyUrl to bypass Ozow's character limit validation
-      // This saves 8 characters compared to the previous version.
+      // 🔥 FIX 2: Removed trailing slashes and kept the URL as short as humanly possible.
       NotifyUrl: `https://youscan-statement-csv-ui-backend-production.up.railway.app/ozow`,
-      IsTest: true 
+      // 🔥 FIX 3: Set to FALSE if you are using your real ADD-ADD-011 SiteCode.
+      IsTest: false 
     };
 
-    // Construct Hash String (Order is critical for Ozow Gateway)
     const hashString = (
       payload.SiteCode + 
       payload.CountryCode + 
@@ -64,8 +61,6 @@ router.post("/create-ozow-payment", async (req, res) => {
     ).toLowerCase();
 
     const hash = crypto.createHash("sha512").update(hashString).digest("hex");
-
-    console.log(`✅ Optimized Payment Link Generated: ${bankReference}`);
 
     res.status(200).json({
       ...payload,
