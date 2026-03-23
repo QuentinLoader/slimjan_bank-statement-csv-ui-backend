@@ -5,7 +5,7 @@ import crypto from "crypto";
 
 const router = express.Router();
 
-// ✅ STRICT Ozow payment request hash (CORRECT ORDER)
+// ✅ FIXED: Strict Ozow payment request hash with per-field lowercasing
 function generateOzowRequestHash(data, privateKey) {
   const parts = [
     data.SiteCode,
@@ -22,18 +22,16 @@ function generateOzowRequestHash(data, privateKey) {
     privateKey
   ];
 
+  // Map every part to a string and LOWERCASE IT INDIVIDUALLY before joining
   const hashString = parts
-    .map(v => (v === undefined || v === null ? "" : String(v)))
+    .map(v => (v === undefined || v === null ? "" : String(v).toLowerCase()))
     .join("");
 
-  // 🔴 THE FIX: Convert the entire string to lowercase BEFORE hashing
-  const lowerCaseHashString = hashString.toLowerCase();
-
-  console.log("REQUEST HASH STRING (LOWERCASED):", JSON.stringify(lowerCaseHashString));
+  console.log("CLEANED REQUEST HASH STRING:", JSON.stringify(hashString));
 
   return crypto
     .createHash("sha512")
-    .update(lowerCaseHashString, "utf-8")
+    .update(hashString, "utf-8")
     .digest("hex")
     .toLowerCase();
 }
@@ -50,13 +48,11 @@ router.post(
       }
 
       const plan = PRICING.PLANS[planCode];
-
       if (!plan) {
         return res.status(400).json({ error: "Invalid plan" });
       }
 
       const user = req.user;
-
       if (!user || !user.userId) {
         return res.status(401).json({ error: "Unauthorized" });
       }
@@ -68,15 +64,9 @@ router.post(
         return res.status(500).json({ error: "Payment configuration error" });
       }
 
-      // ✅ Amount MUST be string with 2 decimals
       const amount = (plan.price_cents / 100).toFixed(2);
-
-      // ✅ Transaction reference (used later in webhook)
       const transactionReference = `${user.userId}_${planCode}_${Date.now()}`;
-
-      // ✅ Bank reference (max 20 chars)
       const bankReference = `YS-${Date.now().toString().slice(-10)}`;
-      console.log("BankReference:", bankReference, "Length:", bankReference.length);
 
       const payload = {
         SiteCode: String(siteCode).trim(),
@@ -88,21 +78,12 @@ router.post(
         CancelURL: "https://youscan.addvision.co.za/payment-cancelled",
         ErrorURL: "https://youscan.addvision.co.za/payment-error",
         SuccessURL: "https://youscan.addvision.co.za/payment-return",
-        NotifyURL:
-          "https://youscan-statement-csv-ui-backend-production.up.railway.app/ozow/webhook",
-        IsTest: "true", // ✅ MUST be lowercase for request
+        NotifyURL: "https://youscan-statement-csv-ui-backend-production.up.railway.app/ozow/webhook",
+        IsTest: "true", 
       };
 
-      // 🔍 DEBUG — exact payload
-      console.log("FORM VALUES:");
-      console.log(JSON.stringify(payload, null, 2));
-
-      // ✅ Generate hash
       const hashCheck = generateOzowRequestHash(payload, privateKey);
 
-      console.log("OZOW REQUEST HASH:", hashCheck);
-
-      // ✅ Auto-submit form
       const paymentForm = `
         <html>
           <body onload="document.forms[0].submit()">
