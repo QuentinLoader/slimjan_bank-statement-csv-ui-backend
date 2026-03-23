@@ -26,11 +26,14 @@ function generateOzowRequestHash(data, privateKey) {
     .map(v => (v === undefined || v === null ? "" : String(v)))
     .join("");
 
-  console.log("REQUEST HASH STRING:", JSON.stringify(hashString));
+  // 🔴 THE FIX: Convert the entire string to lowercase BEFORE hashing
+  const lowerCaseHashString = hashString.toLowerCase();
+
+  console.log("REQUEST HASH STRING (LOWERCASED):", JSON.stringify(lowerCaseHashString));
 
   return crypto
     .createHash("sha512")
-    .update(hashString, "utf-8")
+    .update(lowerCaseHashString, "utf-8")
     .digest("hex")
     .toLowerCase();
 }
