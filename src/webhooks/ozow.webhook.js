@@ -1,142 +1,99 @@
-console.log("🔥🔥🔥 OZOW WEBHOOK: UNIVERSAL SYNC ACTIVE 🔥🔥🔥");
-
 import express from "express";
 import crypto from "crypto";
-import pool from "../config/db.js";
 
 const router = express.Router();
 
-/**
- * ✅ RAW BODY CAPTURE
- * Essential for maintaining field order as Ozow sent it.
- */
-router.use(
-  express.urlencoded({
-    extended: true,
-    verify: (req, res, buf) => {
-      req.rawBody = buf.toString();
-    },
-  })
-);
+const getPrice = (planCode) => {
+  const prices = {
+    PAYG_10: 5.0,
+    MONTHLY_25: 25.0,
+    PRO_YEAR_UNLIMITED: 250.0,
+  };
+  return prices[planCode] || null;
+};
 
-/**
- * ✅ THE FIX: Strict Field Hashing
- * Ozow Notify only uses these specific fields in this order.
- */
-function buildOzowNotifyHash(payload, privateKey) {
-  const hashKeys = [
-    "SiteCode",
-    "TransactionId",
-    "TransactionReference",
-    "Amount",
-    "Status",
-    "CurrencyCode",
-    "IsTest",
-    "StatusMessage"
-  ];
-
-  let hashString = "";
-
-  hashKeys.forEach(key => {
-    const value = payload[key];
-    if (value !== undefined && value !== null) {
-      hashString += value;
-    }
-  });
-
-  hashString += privateKey;
-  
-  return crypto
-    .createHash("sha512")
-    .update(hashString.toLowerCase(), "utf-8")
-    .digest("hex")
-    .toLowerCase();
-}
-
-router.post("/", async (req, res) => {
-  const client = await pool.connect();
-
+router.post("/create-ozow-payment", async (req, res) => {
   try {
-    console.log("=== OZOW NOTIFY RECEIVED ===");
-    const payload = req.body;
-    const { Status, TransactionReference, Hash, Amount, TransactionId, CurrencyCode } = payload;
+    const { planCode, userId } = req.body;
+    const amount = getPrice(planCode);
 
-    // 1. Signature Verification
-    const generatedHash = buildOzowNotifyHash(payload, process.env.OZOW_PRIVATE_KEY);
-    const ozowHash = String(Hash).trim().toLowerCase();
-
-    if (generatedHash !== ozowHash) {
-      console.error("❌ Hash mismatch!");
-      console.error(`Expected: ${ozowHash}`);
-      console.error(`Generated: ${generatedHash}`);
-      return res.status(400).send("Invalid Signature");
+    if (!amount || !userId) {
+      return res.status(400).json({ error: "INVALID_REQUEST_DATA" });
     }
 
-    console.log("✅ Hash verified successfully");
+    const siteCode = process.env.OZOW_SITE_CODE?.trim();
+    const privateKey = process.env.OZOW_PRIVATE_KEY?.trim();
 
-    // 2. Filter for 'Complete' only
-    if (Status !== "Complete") {
-      console.log(`⏳ Ignoring status: ${Status}`);
-      return res.status(200).send("OK");
+    if (!siteCode || !privateKey) {
+      return res.status(500).json({ error: "OZOW_CONFIG_MISSING" });
     }
 
-    // 3. Database Operations
-    const parts = TransactionReference.split("_");
-    const userId = parts[0];
-    const planCode = parts[1];
+    const timestamp = Math.floor(Date.now() / 1000).toString().slice(-6);
+    const bankReference = `YZ${String(userId)}X${timestamp}`.substring(0, 20);
 
-    if (!userId || !planCode) {
-      console.error("❌ Invalid Reference Format:", TransactionReference);
-      return res.status(400).send("Bad Ref");
-    }
+    const baseUrl = "https://youscan.addvision.co.za";
+    const notifyBase =
+      "https://youscan-statement-csv-ui-backend-production.up.railway.app";
 
-    // Idempotency check: Using 'external_reference' from your Railway schema
-    const duplicate = await client.query(
-      "SELECT id FROM payments WHERE external_reference = $1",
-      [TransactionReference]
-    );
+    const payload = {
+      SiteCode: siteCode,
+      CountryCode: "ZA",
+      CurrencyCode: "ZAR",
+      Amount: Number(amount).toFixed(2),
+      TransactionReference: bankReference,
+      BankReference: bankReference,
 
-    if (duplicate.rowCount > 0) {
-      console.log("ℹ️ Transaction already processed.");
-      return res.status(200).send("OK");
-    }
+      Optional1: "",
+      Optional2: "",
+      Optional3: "",
+      Optional4: "",
+      Optional5: "",
+      Customer: "",
 
-    await client.query("BEGIN");
+      CancelUrl: `${baseUrl}/payment-cancelled`.trim(),
+      ErrorUrl: `${baseUrl}/payment-error`.trim(),
+      SuccessUrl: `${baseUrl}/payment-return`.trim(),
+      NotifyUrl: `${notifyBase}/ozow`.trim(),
 
-    // Map credits
-    let creditsToAdd = 0;
-    if (planCode === "PAYG_10") creditsToAdd = 10;
-    else if (planCode === "MONTHLY_25") creditsToAdd = 25;
-    else if (planCode === "PRO_YEAR_UNLIMITED") creditsToAdd = 999999;
+      IsTest: false,
+    };
 
-    // Update User (credits_remaining, subscription_status, plan_code)
-    await client.query(
-      `UPDATE users 
-       SET credits_remaining = COALESCE(credits_remaining, 0) + $1,
-           subscription_status = 'active',
-           plan_code = $2
-       WHERE id = $3`,
-      [creditsToAdd, planCode, userId]
-    );
+    const hashString = (
+      payload.SiteCode +
+      payload.CountryCode +
+      payload.CurrencyCode +
+      payload.Amount +
+      payload.TransactionReference +
+      payload.BankReference +
+      payload.Optional1 +
+      payload.Optional2 +
+      payload.Optional3 +
+      payload.Optional4 +
+      payload.Optional5 +
+      payload.Customer +
+      payload.CancelUrl +
+      payload.ErrorUrl +
+      payload.SuccessUrl +
+      payload.NotifyUrl +
+      String(payload.IsTest) +
+      privateKey
+    ).toLowerCase();
 
-    // Record Payment (amount, currency, plan, credits_purchased, external_reference)
-    await client.query(
-      `INSERT INTO payments (user_id, amount, currency, plan, credits_purchased, external_reference)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [userId, Amount, CurrencyCode, planCode, creditsToAdd, TransactionReference]
-    );
+    const hash = crypto.createHash("sha512").update(hashString).digest("hex");
 
-    await client.query("COMMIT");
-    console.log(`💰 SUCCESS: Applied ${creditsToAdd} credits to User ${userId}`);
+    console.log("=== OZOW CREATE PAYMENT DEBUG ===");
+    console.log("bankReference:", bankReference);
+    console.log("IsTest:", payload.IsTest);
+    console.log("hashString:", hashString);
+    console.log("hash:", hash);
 
-    return res.status(200).send("OK");
-
-  } catch (err) {
-    if (client) await client.query("ROLLBACK");
-    console.error("🔥 Webhook Crash:", err);
-    return res.status(500).send("Server Error");
-  } finally {
-    client.release();
+    res.status(200).json({
+      ...payload,
+      HashCheck: hash, // verify frontend form field name against current Ozow expectation
+    });
+  } catch (error) {
+    console.error("❌ Ozow Error:", error);
+    res.status(500).json({ error: "INTERNAL_SERVER_ERROR" });
   }
 });
 
