@@ -4,22 +4,41 @@ import pool from "../config/db.js";
 
 const router = express.Router();
 
+// Helper to get price based on your pricing config
+const getPrice = (planCode) => {
+  const prices = {
+    'PAYG_10': 5.00,
+    'MONTHLY_25': 25.00,
+    'PRO_YEAR_UNLIMITED': 250.00
+  };
+  return prices[planCode] || null;
+};
+
 /**
  * ✅ CREATE OZOW PAYMENT
- * POST /billing/create-ozow-payment
+ * Now only requires planCode from frontend.
  */
 router.post("/create-ozow-payment", async (req, res) => {
   try {
-    const { amount, planCode, userId } = req.body;
+    // 1. Get data from request
+    const { planCode } = req.body;
     
-    if (!amount || !planCode || !userId) {
-      return res.status(400).json({ error: "MISSING_REQUIRED_FIELDS" });
+    // 2. Fallback for userId (Try to get it from your auth middleware if available)
+    // For now, we will expect it in the body OR you can hardcode a test ID.
+    const userId = req.body.userId || req.user?.id; 
+
+    const amount = getPrice(planCode);
+
+    if (!amount || !userId) {
+      console.error("❌ Missing Data:", { planCode, amount, userId });
+      return res.status(400).json({ 
+        error: "MISSING_REQUIRED_FIELDS",
+        details: !amount ? "Invalid Plan Code" : "User ID not found" 
+      });
     }
 
     const siteCode = process.env.OZOW_SITE_CODE;
     const privateKey = process.env.OZOW_PRIVATE_KEY;
-    
-    // Format: userId_planCode_timestamp
     const bankReference = `${userId}_${planCode}_${Date.now()}`;
     
     const payload = {
@@ -33,10 +52,9 @@ router.post("/create-ozow-payment", async (req, res) => {
       ErrorUrl: `https://youscan.addvision.co.za/payment-error`,
       SuccessUrl: `https://youscan.addvision.co.za/payment-return`,
       NotifyUrl: `https://youscan-statement-csv-ui-backend-production.up.railway.app/ozow/webhook`,
-      IsTest: true // 🔥 CHANGE TO false FOR LIVE PAYMENTS
+      IsTest: true 
     };
 
-    // Strict order concatenation for Request Hash
     const hashString = (
       payload.SiteCode +
       payload.CountryCode +
@@ -62,28 +80,6 @@ router.post("/create-ozow-payment", async (req, res) => {
   } catch (error) {
     console.error("❌ Failed to initiate Ozow payment:", error);
     res.status(500).json({ error: "INTERNAL_SERVER_ERROR" });
-  }
-});
-
-/**
- * ✅ CHECK STATUS (Optional helper for frontend)
- * GET /billing/status/:reference
- */
-router.get("/status/:reference", async (req, res) => {
-  try {
-    const { reference } = req.params;
-    const result = await pool.query(
-      "SELECT * FROM payments WHERE external_reference = $1",
-      [reference]
-    );
-
-    if (result.rowCount > 0) {
-      res.json({ status: "Complete", payment: result.rows[0] });
-    } else {
-      res.json({ status: "Pending" });
-    }
-  } catch (err) {
-    res.status(500).json({ error: "DB_ERROR" });
   }
 });
 
