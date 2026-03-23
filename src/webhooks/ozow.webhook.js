@@ -14,7 +14,7 @@ function generateOzowWebhookHash(data, privateKey) {
     data.SiteCode,
     data.TransactionId,
     data.TransactionReference,
-    data.BankReference ?? "", // critical
+    data.BankReference ?? "",
     normalizeAmount(data.Amount),
     data.Status,
     data.Optional1 ?? "",
@@ -27,11 +27,17 @@ function generateOzowWebhookHash(data, privateKey) {
     privateKey
   ];
 
-  const rawString = parts
-    .map(v => (v === undefined || v === null ? "" : String(v)))
-    .join("");
+  const normalizedParts = parts.map(v =>
+    v === undefined || v === null ? "" : String(v)
+  );
 
+  const rawString = normalizedParts.join("");
   const hashString = rawString.toLowerCase();
+
+  console.log("WEBHOOK HASH PARTS:");
+  normalizedParts.forEach((p, i) => {
+    console.log(`${i}: "${p}"`);
+  });
 
   console.log("WEBHOOK RAW STRING:", JSON.stringify(rawString));
   console.log("WEBHOOK HASH STRING:", JSON.stringify(hashString));
@@ -44,7 +50,6 @@ function generateOzowWebhookHash(data, privateKey) {
 }
 
 function parseTransactionReference(reference) {
-  // expected shape: `${userId}_${planCode}_${timestamp}`
   const firstUnderscore = reference.indexOf("_");
   const lastUnderscore = reference.lastIndexOf("_");
 
@@ -69,7 +74,7 @@ async function applyPlanOrCredits(client, userId, planCode) {
         credits_remaining = COALESCE(credits_remaining, 0) + 10
       WHERE id = $1
       `,
-      [userId, planCode]
+      [Number(userId), planCode]
     );
     return;
   }
@@ -83,7 +88,7 @@ async function applyPlanOrCredits(client, userId, planCode) {
         credits_remaining = 25
       WHERE id = $1
       `,
-      [userId, planCode]
+      [Number(userId), planCode]
     );
     return;
   }
@@ -96,7 +101,7 @@ async function applyPlanOrCredits(client, userId, planCode) {
         plan_code = $2
       WHERE id = $1
       `,
-      [userId, planCode]
+      [Number(userId), planCode]
     );
     return;
   }
@@ -122,6 +127,17 @@ router.post(
         return res.status(500).send("CONFIG_ERROR");
       }
 
+      const isTest = String(payload.IsTest || "").toLowerCase() === "true";
+
+      // Sandbox/test mode:
+      // Ozow docs say notification responses are not sent for test transactions.
+      // So do not hard-fail on test webhook hash mismatches.
+      if (isTest) {
+        console.log("Sandbox/test callback received. Skipping strict webhook hash enforcement.");
+        console.log("Test payload:", payload);
+        return res.status(200).send("TEST_OK");
+      }
+
       const expectedHash = generateOzowWebhookHash(payload, privateKey);
       const receivedHash = String(payload.Hash || "").toLowerCase();
 
@@ -134,14 +150,12 @@ router.post(
       }
 
       const {
-        SiteCode,
         TransactionId,
         TransactionReference,
         BankReference,
         Amount,
         Status,
         CurrencyCode,
-        IsTest,
         StatusMessage,
         BankName
       } = payload;
@@ -149,26 +163,6 @@ router.post(
       const { userId, planCode } = parseTransactionReference(TransactionReference);
 
       await client.query("BEGIN");
-
-      // 1) Ensure idempotency record exists
-      // Recommended table:
-      // CREATE TABLE ozow_transactions (
-      //   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      //   provider TEXT NOT NULL,
-      //   transaction_id TEXT NOT NULL UNIQUE,
-      //   transaction_reference TEXT NOT NULL,
-      //   user_id TEXT NOT NULL,
-      //   plan_code TEXT NOT NULL,
-      //   amount NUMERIC(12,2) NOT NULL,
-      //   currency_code TEXT NOT NULL,
-      //   status TEXT NOT NULL,
-      //   bank_reference TEXT,
-      //   bank_name TEXT,
-      //   raw_payload JSONB NOT NULL,
-      //   processed_at TIMESTAMPTZ,
-      //   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      //   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      // );
 
       const existingTx = await client.query(
         `
@@ -184,7 +178,6 @@ router.post(
         await client.query(
           `
           INSERT INTO ozow_transactions (
-            provider,
             transaction_id,
             transaction_reference,
             user_id,
@@ -194,15 +187,16 @@ router.post(
             status,
             bank_reference,
             bank_name,
-            raw_payload
+            raw_payload,
+            created_at,
+            updated_at
           )
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,NOW(),NOW())
           `,
           [
-            "ozow",
             TransactionId,
             TransactionReference,
-            String(userId),
+            Number(userId),
             planCode,
             normalizeAmount(Amount),
             CurrencyCode,
@@ -234,14 +228,12 @@ router.post(
         );
       }
 
-      // 2) Ignore non-complete states safely
       if (Status !== "Complete") {
         console.log("Webhook received but payment not complete:", Status, StatusMessage || "");
         await client.query("COMMIT");
         return res.status(200).send("IGNORED");
       }
 
-      // 3) Check if already processed
       const processedCheck = await client.query(
         `
         SELECT processed_at
@@ -257,26 +249,22 @@ router.post(
         return res.status(200).send("OK");
       }
 
-      // 4) Validate plan exists
       const plan = PRICING.PLANS?.[planCode];
       if (!plan) {
         throw new Error(`Unknown plan code from TransactionReference: ${planCode}`);
       }
 
-      // 5) Apply billing update
       await applyPlanOrCredits(client, userId, planCode);
 
-      // 6) Optional audit log
       await client.query(
         `
         INSERT INTO usage_logs
         (user_id, action, plan_code, credits_deducted)
         VALUES ($1, $2, $3, $4)
         `,
-        [userId, "ozow_payment_completed", planCode, 0]
+        [Number(userId), "ozow_payment_completed", planCode, 0]
       );
 
-      // 7) Mark processed
       await client.query(
         `
         UPDATE ozow_transactions
