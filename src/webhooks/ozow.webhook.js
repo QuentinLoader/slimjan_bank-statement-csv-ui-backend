@@ -6,7 +6,7 @@ import pool from "../config/db.js";
 
 const router = express.Router();
 
-// ✅ Capture RAW BODY (Required for logging/debugging if needed)
+// ✅ Capture RAW BODY (Required for signature integrity)
 router.use(
   express.urlencoded({
     extended: true,
@@ -17,9 +17,9 @@ router.use(
 );
 
 /**
- * ✅ FIXED: Strict Notify Signature Verification
- * Ozow uses a specific set of fields for the Notify/Webhook Hash calculation:
- * SiteCode + TransactionId + TransactionReference + Status + Amount + IsTest + PrivateKey
+ * ✅ FIXED: Global Lowercase Notify Signature Verification
+ * Ozow Notify signatures require the concatenation of specific fields, 
+ * which must then be entirely lowercased before hashing.
  */
 function buildNotifyHash(payload, privateKey) {
   const {
@@ -31,7 +31,7 @@ function buildNotifyHash(payload, privateKey) {
     IsTest
   } = payload;
 
-  // The order of these fields is mandatory for Ozow's Notify verification
+  // The order is critical: SiteCode + TransId + TransRef + Status + Amount + IsTest + PrivateKey
   const parts = [
     SiteCode,
     TransactionId,
@@ -42,16 +42,18 @@ function buildNotifyHash(payload, privateKey) {
     privateKey
   ];
 
-  // Individually lowercase every part and join them
+  // Join original strings first, then lowercase the ENTIRE result
   const hashString = parts
-    .map(v => (v === undefined || v === null ? "" : String(v).toLowerCase()))
+    .map(v => (v === undefined || v === null ? "" : String(v)))
     .join("");
 
-  console.log("DEBUG WEBHOOK HASH STRING:", JSON.stringify(hashString));
+  const lowerCaseHashString = hashString.toLowerCase();
+
+  console.log("FINAL ATTEMPT HASH STRING:", JSON.stringify(lowerCaseHashString));
 
   return crypto
     .createHash("sha512")
-    .update(hashString, "utf-8")
+    .update(lowerCaseHashString, "utf-8")
     .digest("hex")
     .toLowerCase();
 }
@@ -65,7 +67,7 @@ router.post("/", async (req, res) => {
     const payload = req.body;
     const { SiteCode, Status, TransactionReference, Hash, Amount } = payload;
 
-    // 1. Validate SiteCode
+    // 1. SiteCode Validation
     if (SiteCode !== process.env.OZOW_SITE_CODE) {
       console.error("❌ Invalid SiteCode");
       return res.status(400).send("Invalid site");
@@ -81,15 +83,17 @@ router.post("/", async (req, res) => {
 
     if (generatedHash !== ozowHash) {
       console.error("❌ Hash mismatch on callback");
+      console.error("Generated:", generatedHash);
+      console.error("Expected: ", ozowHash);
       return res.status(400).send("Invalid signature");
     }
 
     console.log("✅ Hash verified");
 
-    // 3. Status Handling
+    // 3. Status Handling (Only process 'Complete')
     if (Status !== "Complete") {
       console.log("⏳ Status is:", Status, "- No credits applied.");
-      return res.status(200).send("OK"); // Respond 200 so Ozow stops retrying
+      return res.status(200).send("OK");
     }
 
     console.log("💰 Payment success detected:", TransactionReference);
@@ -104,7 +108,7 @@ router.post("/", async (req, res) => {
       return res.status(400).send("Invalid reference format");
     }
 
-    // Idempotency check
+    // Idempotency check: Don't process twice
     const existingPayment = await client.query(
       "SELECT id FROM payments WHERE reference = $1",
       [TransactionReference]
