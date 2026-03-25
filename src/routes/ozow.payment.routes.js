@@ -1,5 +1,6 @@
 import express from "express";
 import crypto from "crypto";
+import pool from "../config/db.js";
 import { authenticateUser } from "../middleware/auth.middleware.js";
 import { PRICING } from "../config/pricing.js";
 
@@ -36,7 +37,6 @@ function generateOzowRequestHash(data, privateKey) {
   const rawString = normalizedParts.join("");
   const hashString = rawString.toLowerCase();
 
-  // 🔥 CRITICAL DEBUG (Step 1)
   console.log("REQUEST HASH PARTS:");
   normalizedParts.forEach((p, i) => {
     console.log(`${i}: "${p}"`);
@@ -82,6 +82,29 @@ router.post(
         return res.status(500).json({ error: "Payment configuration error" });
       }
 
+      // 🔒 DUPLICATE PAYMENT GUARD
+      const existingPayment = await pool.query(
+        `
+        SELECT id, transaction_reference, plan_code, created_at
+        FROM ozow_transactions
+        WHERE user_id = $1
+          AND processed_at IS NULL
+          AND created_at > NOW() - INTERVAL '30 minutes'
+        ORDER BY created_at DESC
+        LIMIT 1
+        `,
+        [user.userId]
+      );
+
+      if (existingPayment.rows.length > 0) {
+        return res.status(400).json({
+          error: "PAYMENT_ALREADY_PENDING",
+          message: "You already have a payment in progress. Please complete or wait before trying again.",
+          transactionReference: existingPayment.rows[0].transaction_reference,
+          planCode: existingPayment.rows[0].plan_code
+        });
+      }
+
       const amount = (plan.price_cents / 100).toFixed(2);
       const transactionReference = `${user.userId}_${planCode}_${Date.now()}`;
       const bankReference = `YS-${Date.now().toString().slice(-10)}`;
@@ -109,7 +132,7 @@ router.post(
         NotifyURL:
           "https://youscan-statement-csv-ui-backend-production.up.railway.app/ozow/webhook",
 
-        IsTest: "false"
+        IsTest: "false" // change to "true" for sandbox testing
       };
 
       console.log("FORM VALUES:");
