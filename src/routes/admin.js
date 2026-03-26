@@ -6,9 +6,21 @@ const router = express.Router();
 
 router.get("/metrics", authenticateUser, async (req, res) => {
   try {
-    // Temporary admin lock
     console.log("ADMIN REQ USER:", req.user);
-    if (req.user?.email !== "quentin.loader@gmail.com") {
+
+    const meResult = await pool.query(
+      `
+      SELECT email
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+      `,
+      [req.user.userId]
+    );
+
+    const myEmail = meResult.rows[0]?.email;
+
+    if (myEmail !== "quentin.loader@gmail.com") {
       return res.status(403).json({ error: "FORBIDDEN" });
     }
 
