@@ -16,7 +16,7 @@ export const PRICING = {
       name: "Pay-as-YouScan",
       type: "credits",
       credits: 10,
-      price_cents: 500,
+      price_cents: 2950,
       recurring: false
     },
 
@@ -26,7 +26,7 @@ export const PRICING = {
       type: "subscription",
       billing_cycle: "monthly",
       credits_per_cycle: 25,
-      price_cents: 500,
+      price_cents: 4850,
       recurring: true
     },
 
@@ -36,7 +36,7 @@ export const PRICING = {
       type: "subscription",
       billing_cycle: "yearly",
       unlimited: true,
-      price_cents: 200,
+      price_cents: 48500,
       recurring: true
     }
   }
