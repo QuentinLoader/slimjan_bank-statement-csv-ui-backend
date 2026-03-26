@@ -166,11 +166,12 @@ router.post(
           transaction_id,
           plan_code,
           amount,
+          currency_code,
           status,
           created_at,
           updated_at
-        )
-        VALUES ($1, $2, NULL, $3, $4, 'Pending', NOW(), NOW())
+      )
+        VALUES ($1, $2, $2, $3, $4, 'ZAR', 'Pending', NOW(), NOW())
         `,
         [user.userId, transactionReference, planCode, amount]
       );
