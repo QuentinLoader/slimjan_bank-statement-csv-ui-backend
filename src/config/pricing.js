@@ -36,7 +36,7 @@ export const PRICING = {
       type: "subscription",
       billing_cycle: "yearly",
       unlimited: true,
-      price_cents: 48500,
+      price_cents: 200,
       recurring: true
     }
   }
