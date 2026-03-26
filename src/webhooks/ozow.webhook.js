@@ -85,7 +85,10 @@ async function applyPlanOrCredits(client, userId, planCode) {
       `
       UPDATE users
       SET plan_code = $2,
-          credits_remaining = 25
+          subscription_status = 'active',
+          credits_remaining = 25,
+          credits_per_cycle = 25,
+          renewal_date = NOW() + INTERVAL '1 month'
       WHERE id = $1
       `,
       [Number(userId), planCode]
@@ -98,6 +101,8 @@ async function applyPlanOrCredits(client, userId, planCode) {
       `
       UPDATE users
       SET plan_code = $2,
+          subscription_status = 'active',
+          renewal_date = NOW() + INTERVAL '1 year',
           credits_remaining = NULL
       WHERE id = $1
       `,
