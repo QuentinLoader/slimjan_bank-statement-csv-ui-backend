@@ -30,7 +30,7 @@ function generateOzowRequestHash(data, privateKey) {
     privateKey
   ];
 
-  const normalizedParts = parts.map(v =>
+  const normalizedParts = parts.map((v) =>
     v === undefined || v === null ? "" : String(v)
   );
 
@@ -82,14 +82,28 @@ router.post(
         return res.status(500).json({ error: "Payment configuration error" });
       }
 
-      // 🔒 DUPLICATE PAYMENT GUARD
+      // 1) Expire old stuck payments first
+      await pool.query(
+        `
+        UPDATE ozow_transactions
+        SET status = 'Expired',
+            processed_at = NOW()
+        WHERE user_id = $1
+          AND processed_at IS NULL
+          AND created_at <= NOW() - INTERVAL '15 minutes'
+        `,
+        [user.userId]
+      );
+
+      // 2) Only block on a recent active payment
       const existingPayment = await pool.query(
         `
-        SELECT id, transaction_reference, plan_code, created_at
+        SELECT id, transaction_reference, plan_code, created_at, status
         FROM ozow_transactions
         WHERE user_id = $1
           AND processed_at IS NULL
-          AND created_at > NOW() - INTERVAL '30 minutes'
+          AND created_at > NOW() - INTERVAL '15 minutes'
+          AND COALESCE(status, 'Pending') NOT IN ('Complete', 'Cancelled', 'Expired', 'Failed')
         ORDER BY created_at DESC
         LIMIT 1
         `,
@@ -99,15 +113,16 @@ router.post(
       if (existingPayment.rows.length > 0) {
         return res.status(400).json({
           error: "PAYMENT_ALREADY_PENDING",
-          message: "You already have a payment in progress. Please complete or wait before trying again.",
+          message: "You already have a payment in progress. Please complete it first.",
           transactionReference: existingPayment.rows[0].transaction_reference,
           planCode: existingPayment.rows[0].plan_code
         });
       }
 
       const amount = (plan.price_cents / 100).toFixed(2);
-      const transactionReference = `${user.userId}_${planCode}_${Date.now()}`;
-      const bankReference = `YS-${Date.now().toString().slice(-10)}`;
+      const nowMs = Date.now();
+      const transactionReference = `${user.userId}_${planCode}_${nowMs}`;
+      const bankReference = `YS-${String(nowMs).slice(-10)}`;
 
       console.log("BankReference:", bankReference, "Length:", bankReference.length);
 
@@ -132,7 +147,7 @@ router.post(
         NotifyURL:
           "https://youscan-statement-csv-ui-backend-production.up.railway.app/ozow/webhook",
 
-        IsTest: "false" // change to "true" for sandbox testing
+        IsTest: "false"
       };
 
       console.log("FORM VALUES:");
@@ -141,6 +156,24 @@ router.post(
       const hashCheck = generateOzowRequestHash(payload, privateKey);
 
       console.log("OZOW REQUEST HASH:", hashCheck);
+
+      // 3) Record pending transaction before redirecting to Ozow
+      await pool.query(
+        `
+        INSERT INTO ozow_transactions (
+          user_id,
+          transaction_reference,
+          transaction_id,
+          plan_code,
+          amount,
+          status,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, NULL, $3, $4, 'Pending', NOW(), NOW())
+        `,
+        [user.userId, transactionReference, planCode, amount]
+      );
 
       const paymentForm = `
         <html>
