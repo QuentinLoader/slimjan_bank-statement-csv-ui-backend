@@ -60,17 +60,20 @@ function extractStatementEndYear(statementPeriodEnd) {
    FUNCTION: resolveYear
    PURPOSE:
    Resolve 2-digit years using statement context.
+
    RULE:
-   - Prefer 2000-based year
-   - If it lands unreasonably ahead of statement end year, roll back by 10
-   NOTE:
-   - This matches your current Standard Bank cases like 251231 -> 2025
+   - For Standard Bank embedded 6-digit tokens like 251231 or 251212,
+     the last 2 digits are not reliable literal years in this OCR output.
+   - Anchor to statement year context instead.
+   - For a statement ending in Jan 2026, these transactions belong to Dec 2025.
 ========================= */
 function resolveYear(yy, statementEndYear) {
   const candidate = 2000 + Number(yy);
 
-  if (candidate > statementEndYear) {
-    return candidate - 10;
+  // If candidate is implausible relative to the statement period,
+  // force it to the prior year of the statement end.
+  if (candidate < statementEndYear - 2 || candidate > statementEndYear + 1) {
+    return statementEndYear - 1;
   }
 
   return candidate;
