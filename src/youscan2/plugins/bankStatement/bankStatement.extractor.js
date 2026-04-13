@@ -411,26 +411,44 @@ function cleanStandardBankMoneyToken(value) {
    - "01 023,261.42-"   => "01023,261.42-"
    - "12 1211,382.94-"  => "12121,382.94-"
 ========================= */
+/* =========================
+   FUNCTION: buildCombinedBalanceCandidate
+   PURPOSE: Reconstruct OCR-split Standard Bank balance tokens.
+   STRATEGY:
+   - Read the balance from the far right of the line
+   - Treat the last decimal token as the real balance core
+   - If a 1-2 digit prefix column sits immediately before it, prepend it
+   EXAMPLES:
+   - "01 023,261.42-"   => "01 023,261.42-"
+   - "12 1211,382.94-"  => "12 1211,382.94-"
+========================= */
 function buildCombinedBalanceCandidate(line) {
   const raw = normalizeWhitespace(line);
 
-  const match = raw.match(/(\d{2})\s+(\d{3,4},\d{3}\.\d{2}-?)\s*$/);
+  // Capture optional 1-2 digit prefix + final balance token at end of line
+  const match = raw.match(/(?:^|\s)(\d{1,2})?\s*(\d{3,4},\d{3}\.\d{2}-?)\s*$/);
   if (!match) return null;
 
-  const prefix = match[1];
+  const prefix = match[1] || "";
   const token = match[2];
 
+  // If there is no prefix, just return the token
+  if (!prefix) return token;
+
+  // Rebuild as "prefix + token"
+  // Example: prefix=12 token=1211,382.94- => 121211,382.94- (wrong if naively concatenated)
+  // We only want to prepend when OCR split the left-most thousands group.
   const leadingGroup = token.split(",")[0];
 
-  if (leadingGroup.length === 3) {
-    return `${prefix}${token}`;
+  // Typical valid cases:
+  // 023,261.42- with prefix 01 => 01 023,261.42-
+  // 221,902.94- with prefix 12 => 12 221,902.94-
+  // 1211,382.94- with prefix 12 => 12 1211,382.94- (OCR corruption case)
+  if (leadingGroup.length === 3 || leadingGroup.length === 4) {
+    return `${prefix} ${token}`;
   }
 
-  if (leadingGroup.length === 4) {
-    return `${prefix}${token.slice(1)}`;
-  }
-
-  return null;
+  return token;
 }
 
 /* =========================
@@ -442,21 +460,38 @@ function buildCombinedBalanceCandidate(line) {
    - Falls back to last money token
 ========================= */
 function extractStandardBankMoneyPair(line) {
-  const raw = String(line || "");
+  const raw = normalizeWhitespace(String(line || ""));
+  if (!raw) return null;
 
-  const matches = raw.match(/\d[\d\s,]*\.\d{2}-?/g);
-  if (!matches || matches.length < 2) return null;
+  // Step 1: amount = first money token in the line
+  const amountMatch = raw.match(/^\D*(\d[\d,]*\.\d{2}-?)/);
+  if (!amountMatch) return null;
 
-  const amountRaw = matches[0];
-  const fallbackBalanceRaw = matches[matches.length - 1];
-  const reconstructedBalanceRaw =
-    buildCombinedBalanceCandidate(raw) || fallbackBalanceRaw;
-
+  const amountRaw = amountMatch[1];
   const amount = cleanStandardBankMoneyToken(amountRaw);
-  const balance = cleanStandardBankMoneyToken(reconstructedBalanceRaw);
+  if (amount === null) return null;
 
-  if (amount === null || balance === null) return null;
+  // Step 2: balance = reconstruct from far-right side of line
+  const combinedBalanceCandidate = buildCombinedBalanceCandidate(raw);
 
+  let balance = null;
+
+  if (combinedBalanceCandidate) {
+    balance = cleanStandardBankMoneyToken(combinedBalanceCandidate);
+  }
+
+  // Step 3: fallback to last decimal token if reconstruction failed
+  if (balance === null) {
+    const allMatches = raw.match(/\d[\d\s,]*\.\d{2}-?/g);
+    if (!allMatches || allMatches.length < 2) return null;
+
+    const fallbackBalanceRaw = allMatches[allMatches.length - 1];
+    balance = cleanStandardBankMoneyToken(fallbackBalanceRaw);
+  }
+
+  if (balance === null) return null;
+
+  // Sanity guards
   if (Math.abs(amount) > 1_000_000) return null;
   if (Math.abs(balance) > 100_000_000) return null;
 
