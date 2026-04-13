@@ -406,32 +406,47 @@ function cleanStandardBankMoneyToken(value) {
 
 /* =========================
    FUNCTION: buildCombinedBalanceCandidate
-   PURPOSE: Reconstruct OCR-split Standard Bank balance tokens.
-   EXAMPLES:
-   - "01 023,261.42-"   => "01023,261.42-"
-   - "12 1211,382.94-"  => "12121,382.94-"
+   PURPOSE: Extract only the final balance token from the end of the line.
+   CRITICAL:
+   - Ignores prefix/day column like "01" or "12"
+   - Returns only the final money token
 ========================= */
-/* =========================
-   FUNCTION: buildCombinedBalanceCandidate
-   PURPOSE: Reconstruct OCR-split Standard Bank balance tokens.
-   STRATEGY:
-   - Read the balance from the far right of the line
-   - Treat the last decimal token as the real balance core
-   - If a 1-2 digit prefix column sits immediately before it, prepend it
-   EXAMPLES:
-   - "01 023,261.42-"   => "01 023,261.42-"
-   - "12 1211,382.94-"  => "12 1211,382.94-"
-========================= */
- function buildCombinedBalanceCandidate(line) {
+function buildCombinedBalanceCandidate(line) {
   const raw = normalizeWhitespace(line);
-
-  // Extract ONLY the LAST valid money token
   const matches = raw.match(/\d{1,4},\d{3}\.\d{2}-?/g);
 
   if (!matches || matches.length === 0) return null;
 
-  // The TRUE balance is always the last one
   return matches[matches.length - 1];
+}
+
+/* =========================
+   FUNCTION: fixOcrBalance
+   PURPOSE:
+   Fix OCR-inserted extra digit in balances like:
+   1211,382.94 -> 121,382.94
+   1023,261.42 -> 023,261.42
+   NOTE:
+   - Conservative correction used only on suspicious 7+ digit whole parts
+========================= */
+function fixOcrBalance(balance) {
+  if (balance == null || !Number.isFinite(balance)) return null;
+
+  const sign = balance < 0 ? -1 : 1;
+  const abs = Math.abs(balance);
+  const asFixed = abs.toFixed(2);
+  const [whole, decimal] = asFixed.split(".");
+
+  if (whole.length >= 7) {
+    const attempt = whole.slice(0, 2) + whole.slice(3);
+    const fixed = Number(`${attempt}.${decimal}`);
+
+    if (!Number.isNaN(fixed)) {
+      return sign * fixed;
+    }
+  }
+
+  return balance;
 }
 
 /* =========================
@@ -440,13 +455,12 @@ function cleanStandardBankMoneyToken(value) {
    CRITICAL:
    - First money token = amount
    - Balance prefers reconstructed end-of-line candidate when present
-   - Falls back to last money token
+   - Falls back to last decimal token
 ========================= */
 function extractStandardBankMoneyPair(line) {
   const raw = normalizeWhitespace(String(line || ""));
   if (!raw) return null;
 
-  // Step 1: amount = first money token in the line
   const amountMatch = raw.match(/^\D*(\d[\d,]*\.\d{2}-?)/);
   if (!amountMatch) return null;
 
@@ -454,7 +468,6 @@ function extractStandardBankMoneyPair(line) {
   const amount = cleanStandardBankMoneyToken(amountRaw);
   if (amount === null) return null;
 
-  // Step 2: balance = reconstruct from far-right side of line
   const combinedBalanceCandidate = buildCombinedBalanceCandidate(raw);
 
   let balance = null;
@@ -463,7 +476,6 @@ function extractStandardBankMoneyPair(line) {
     balance = cleanStandardBankMoneyToken(combinedBalanceCandidate);
   }
 
-  // Step 3: fallback to last decimal token if reconstruction failed
   if (balance === null) {
     const allMatches = raw.match(/\d[\d\s,]*\.\d{2}-?/g);
     if (!allMatches || allMatches.length < 2) return null;
@@ -474,14 +486,13 @@ function extractStandardBankMoneyPair(line) {
 
   if (balance === null) return null;
 
-  // Sanity guards
   if (Math.abs(amount) > 1_000_000) return null;
   if (Math.abs(balance) > 100_000_000) return null;
 
   return {
-  amount,
-  balance: fixOcrBalance(balance)
-};
+    amount,
+    balance: fixOcrBalance(balance),
+  };
 }
 
 /* =========================
