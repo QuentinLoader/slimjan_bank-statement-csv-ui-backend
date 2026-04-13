@@ -145,13 +145,20 @@ function applyBalanceDrivenCorrection(transactions) {
         curr.amount = diff;
       }
 
-      if (shouldSkipNoImpactRow(curr.description, curr.amount, curr.balance, prev.balance)) {
+      if (
+        shouldSkipNoImpactRow(
+          curr.description,
+          curr.amount,
+          curr.balance,
+          prev.balance
+        )
+      ) {
         curr._skip = true;
       }
     }
   }
 
-  return transactions.filter(tx => !tx._skip);
+  return transactions.filter((tx) => !tx._skip);
 }
 
 /* =========================
@@ -165,7 +172,7 @@ function looksLikeAbsaTransactionLine(line) {
 function extractAbsaTransactions(text) {
   const lines = String(text)
     .split(/\r?\n/)
-    .map(line => line.trim())
+    .map((line) => line.trim())
     .filter(Boolean);
 
   const transactions = [];
@@ -179,7 +186,7 @@ function extractAbsaTransactions(text) {
     const date = dateMatch[1];
     const rest = line.slice(date.length).trim();
 
-    const moneyMatches = [...rest.matchAll(/-?\d[\d,]*\.\d{2}/g)].map(m => ({
+    const moneyMatches = [...rest.matchAll(/-?\d[\d,]*\.\d{2}/g)].map((m) => ({
       value: m[0],
       index: m.index,
     }));
@@ -228,7 +235,7 @@ function extractAbsaTransactions(text) {
     });
   }
 
-  return applyBalanceDrivenCorrection(transactions).map(tx => ({
+  return applyBalanceDrivenCorrection(transactions).map((tx) => ({
     date: tx.date,
     description: tx.description,
     amount: Number(tx.amount.toFixed(2)),
@@ -240,141 +247,112 @@ function extractAbsaTransactions(text) {
    STANDARD BANK
 ========================= */
 
-function looksLikeStandardBankTransactionLine(line) {
-  const trimmed = line.trim();
+function parseStandardBankSignedMoney(raw) {
+  if (!raw) return null;
+
+  const trimmed = String(raw).trim();
+  const isNegative = trimmed.endsWith("-");
+  const numeric = parseMoney(trimmed.replace(/-$/, ""));
+
+  if (numeric === null) return null;
+  return isNegative ? -Math.abs(numeric) : Math.abs(numeric);
+}
+
+function looksLikeStandardBankAmountBalanceLine(line) {
+  const matches = [...String(line).matchAll(/\d[\d,\s]*\.\d{2}-?/g)];
+  return matches.length >= 2;
+}
+
+function extractStandardBankDateFromText(text) {
+  const value = String(text || "").trim();
+
+  let match = value.match(/\b(\d{2})[\/-](\d{2})[\/-](\d{2,4})\b/);
+  if (match) {
+    let year = match[3];
+    if (year.length === 2) year = `20${year}`;
+    return `${match[1]}/${match[2]}/${year}`;
+  }
+
+  match = value.match(/\b(\d{2})(\d{2})(\d{2})\b/);
+  if (match) {
+    return `${match[1]}/${match[2]}/20${match[3]}`;
+  }
+
+  return null;
+}
+
+function isLikelyStandardBankNoise(line) {
+  const lower = String(line || "").trim().toLowerCase();
+  if (!lower) return true;
 
   return (
-    /^\d{1,2}\s+[A-Za-z]{3}\s+/.test(trimmed) ||                 // 01 Jan ...
-    /^\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}\s+/.test(trimmed) ||       // 01/01/2025 ...
-    /^\d{1,2}[\/-]\d{1,2}\s+/.test(trimmed)                      // 01/01 ...
+    lower === "description" ||
+    lower === "amount balance" ||
+    lower === "amount" ||
+    lower === "balance" ||
+    lower === "debit credit balance" ||
+    lower === "date description amount balance" ||
+    lower.includes("page ") ||
+    lower.includes("standard bank") ||
+    lower.includes("closing balance") ||
+    lower.includes("opening balance") ||
+    lower.includes("statement period")
   );
 }
 
 function extractStandardBankTransactions(text) {
   const lines = String(text)
     .split(/\r?\n/)
-    .map(l => l.trim())
+    .map((line) => line.trim())
     .filter(Boolean);
 
   const transactions = [];
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const currentLine = lines[i];
 
-    // Look for amount + balance line
-    const moneyMatches = [...line.matchAll(/-?\d[\d,]*\.\d{2}-?/g)];
+    if (!looksLikeStandardBankAmountBalanceLine(currentLine)) continue;
 
-    if (moneyMatches.length < 2) continue;
-
-    const amountRaw = moneyMatches[0][0];
-    const balanceRaw = moneyMatches[1][0];
-
-    let amount = parseMoney(amountRaw.replace("-", ""));
-    let balance = parseMoney(balanceRaw.replace("-", ""));
-
-    if (amount === null || balance === null) continue;
-
-    // Determine sign from trailing "-"
-    if (amountRaw.endsWith("-")) {
-      amount = -Math.abs(amount);
-    }
-
-    if (balanceRaw.endsWith("-")) {
-      balance = -Math.abs(balance);
-    }
-
-    // Build description from previous line(s)
-    let description = "";
-
-    if (i > 0) {
-      description = lines[i - 1];
-    }
-
-    // Optional extra line (often reference)
-    if (i + 1 < lines.length && !lines[i + 1].includes("##")) {
-      description += " " + lines[i + 1];
-    }
-
-    description = normalizeWhitespace(description);
-
-    transactions.push({
-      date: null,
-      description,
-      amount,
-      balance,
-    });
-  }
-
-  return applyBalanceDrivenCorrection(transactions).map(tx => ({
-    date: tx.date,
-    description: tx.description,
-    amount: Number(tx.amount.toFixed(2)),
-    balance: Number(tx.balance.toFixed(2)),
-  }));
-} {
-  const lines = String(text)
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(Boolean);
-
-  const transactions = [];
-
-  for (const line of lines) {
-    if (!looksLikeStandardBankTransactionLine(line)) continue;
-
-    const moneyMatches = [...line.matchAll(/-?\d[\d,]*\.\d{2}/g)].map(m => ({
+    const moneyMatches = [
+      ...currentLine.matchAll(/\d[\d,\s]*\.\d{2}-?/g),
+    ].map((m) => ({
       value: m[0],
       index: m.index,
     }));
 
     if (moneyMatches.length < 2) continue;
 
-    const dateMatch = line.match(
-      /^(\d{1,2}\s+[A-Za-z]{3}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{1,2}[\/-]\d{1,2})/
-    );
-    if (!dateMatch) continue;
+    const amountRaw = moneyMatches[0].value;
+    const balanceRaw = moneyMatches[1].value;
 
-    const date = normalizeWhitespace(dateMatch[1]);
-
-    const amountMatch = moneyMatches[moneyMatches.length - 2];
-    const balanceMatch = moneyMatches[moneyMatches.length - 1];
-
-    let description = line
-      .slice(dateMatch[0].length, amountMatch.index)
-      .replace(/\s+/g, " ")
-      .trim();
-
-    description = normalizeWhitespace(description);
-    if (!description) continue;
-
-    let amount = parseMoney(amountMatch.value);
-    const balance = parseMoney(balanceMatch.value);
+    const amount = parseStandardBankSignedMoney(amountRaw);
+    const balance = parseStandardBankSignedMoney(balanceRaw);
 
     if (amount === null || balance === null) continue;
 
-    const descLower = description.toLowerCase();
+    const descriptionParts = [];
+    const previousLine = i > 0 ? lines[i - 1] : "";
+    const nextLine = i + 1 < lines.length ? lines[i + 1] : "";
 
-    const isCredit =
-      descLower.includes("deposit") ||
-      descLower.includes("credit") ||
-      descLower.includes("salary") ||
-      descLower.includes("payment received");
-
-    const isDebit =
-      descLower.includes("fee") ||
-      descLower.includes("charge") ||
-      descLower.includes("withdrawal") ||
-      descLower.includes("debit") ||
-      descLower.includes("purchase") ||
-      descLower.includes("payment");
-
-    if (isCredit) {
-      amount = Math.abs(amount);
-    } else if (isDebit) {
-      amount = -Math.abs(amount);
+    if (previousLine && !isLikelyStandardBankNoise(previousLine)) {
+      descriptionParts.push(previousLine);
     }
 
-    if (amount === 0) continue;
+    if (
+      nextLine &&
+      !isLikelyStandardBankNoise(nextLine) &&
+      !looksLikeStandardBankAmountBalanceLine(nextLine)
+    ) {
+      descriptionParts.push(nextLine);
+    }
+
+    const description = normalizeWhitespace(descriptionParts.join(" "));
+    if (!description) continue;
+
+    const date =
+      extractStandardBankDateFromText(nextLine) ||
+      extractStandardBankDateFromText(previousLine) ||
+      extractStandardBankDateFromText(description);
 
     transactions.push({
       date,
@@ -384,7 +362,7 @@ function extractStandardBankTransactions(text) {
     });
   }
 
-  return applyBalanceDrivenCorrection(transactions).map(tx => ({
+  return applyBalanceDrivenCorrection(transactions).map((tx) => ({
     date: tx.date,
     description: tx.description,
     amount: Number(tx.amount.toFixed(2)),
