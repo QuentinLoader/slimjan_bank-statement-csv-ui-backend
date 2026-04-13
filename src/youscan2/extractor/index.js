@@ -2,7 +2,7 @@ import { extractAbsaTransactions } from "./absa/extractor.js";
 import {
   extractStandardBankTransactions,
   deriveStandardBankOpeningBalanceFromFirstTransaction,
-} from "./standardbank/extractor.js";
+} from "./standardBank/extractor.js";
 import {
   extractAccountNumber,
   extractClientName,
