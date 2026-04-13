@@ -3,10 +3,21 @@
  * Bank statement extractor (merged ABSA + Standard Bank)
  */
 
+/* =========================
+   FUNCTION: normalizeWhitespace
+   PURPOSE: Collapse repeated whitespace and trim text.
+========================= */
 function normalizeWhitespace(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
 
+/* =========================
+   FUNCTION: parseMoney
+   PURPOSE: Convert a money-like string into a Number.
+   NOTES:
+   - Removes spaces and commas
+   - Returns null if parsing fails
+========================= */
 function parseMoney(value) {
   if (!value) return null;
 
@@ -22,6 +33,10 @@ function parseMoney(value) {
    METADATA HELPERS
 ========================= */
 
+/* =========================
+   FUNCTION: extractAccountNumber
+   PURPOSE: Extract account number from statement text.
+========================= */
 function extractAccountNumber(text) {
   const patterns = [
     /account number[:\s]+([0-9]{6,20})/i,
@@ -38,6 +53,10 @@ function extractAccountNumber(text) {
   return null;
 }
 
+/* =========================
+   FUNCTION: extractClientName
+   PURPOSE: Extract likely client/account holder name.
+========================= */
 function extractClientName(text) {
   const patterns = [
     /account holder[:\s]+([A-Z][A-Z\s'.&-]{3,80})/i,
@@ -53,6 +72,10 @@ function extractClientName(text) {
   return null;
 }
 
+/* =========================
+   FUNCTION: extractBalanceByPatterns
+   PURPOSE: Shared helper for opening/closing balance extraction.
+========================= */
 function extractBalanceByPatterns(text, patterns) {
   for (const pattern of patterns) {
     const match = text.match(pattern);
@@ -65,6 +88,10 @@ function extractBalanceByPatterns(text, patterns) {
   return null;
 }
 
+/* =========================
+   FUNCTION: extractOpeningBalance
+   PURPOSE: Extract opening balance from statement text.
+========================= */
 function extractOpeningBalance(text) {
   return extractBalanceByPatterns(text, [
     /opening balance[:\s]+(-?[0-9,]+\.\d{2})/i,
@@ -73,6 +100,10 @@ function extractOpeningBalance(text) {
   ]);
 }
 
+/* =========================
+   FUNCTION: extractClosingBalance
+   PURPOSE: Extract closing balance from statement text.
+========================= */
 function extractClosingBalance(text) {
   return extractBalanceByPatterns(text, [
     /closing balance[:\s]+(-?[0-9,]+\.\d{2})/i,
@@ -81,6 +112,10 @@ function extractClosingBalance(text) {
   ]);
 }
 
+/* =========================
+   FUNCTION: extractStatementPeriod
+   PURPOSE: Extract statement start/end dates when explicitly present.
+========================= */
 function extractStatementPeriod(text) {
   const patterns = [
     /statement period[:\s]+([0-9]{1,2}[\/-][0-9]{1,2}[\/-][0-9]{2,4})\s+(?:to|-)\s+([0-9]{1,2}[\/-][0-9]{1,2}[\/-][0-9]{2,4})/i,
@@ -108,6 +143,10 @@ function extractStatementPeriod(text) {
    COMMON HELPERS
 ========================= */
 
+/* =========================
+   FUNCTION: shouldSkipNoImpactRow
+   PURPOSE: Remove rows that do not affect balance/amount meaningfully.
+========================= */
 function shouldSkipNoImpactRow(description, amount, currentBalance, previousBalance) {
   const lower = String(description).toLowerCase();
 
@@ -130,6 +169,10 @@ function shouldSkipNoImpactRow(description, amount, currentBalance, previousBala
   return false;
 }
 
+/* =========================
+   FUNCTION: applyBalanceDrivenCorrection
+   PURPOSE: Recalculate amounts from balance movement and skip no-impact rows.
+========================= */
 function applyBalanceDrivenCorrection(transactions) {
   for (let i = 1; i < transactions.length; i++) {
     const prev = transactions[i - 1];
@@ -165,10 +208,18 @@ function applyBalanceDrivenCorrection(transactions) {
    ABSA
 ========================= */
 
+/* =========================
+   FUNCTION: looksLikeAbsaTransactionLine
+   PURPOSE: Identify ABSA lines that appear to start with a date.
+========================= */
 function looksLikeAbsaTransactionLine(line) {
   return /^\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?/.test(line.trim());
 }
 
+/* =========================
+   FUNCTION: extractAbsaTransactions
+   PURPOSE: Extract ABSA transactions without altering existing logic.
+========================= */
 function extractAbsaTransactions(text) {
   const lines = String(text)
     .split(/\r?\n/)
@@ -247,6 +298,13 @@ function extractAbsaTransactions(text) {
    STANDARD BANK
 ========================= */
 
+/* =========================
+   FUNCTION: cleanStandardBankMoneyToken
+   PURPOSE: Parse Standard Bank amount/balance tokens.
+   NOTES:
+   - Handles trailing minus sign
+   - Removes spaces and commas
+========================= */
 function cleanStandardBankMoneyToken(value) {
   if (!value) return null;
 
@@ -269,18 +327,22 @@ function cleanStandardBankMoneyToken(value) {
   return negative ? -num : num;
 }
 
+/* =========================
+   FUNCTION: extractStandardBankMoneyPair
+   PURPOSE: Extract amount + balance from a Standard Bank money line.
+   CRITICAL:
+   - First money token = amount
+   - Last money token = balance
+   - This avoids OCR corruption where middle spacing is broken
+========================= */
 function extractStandardBankMoneyPair(line) {
   const raw = String(line || "");
 
-  const cleaned = raw
-    .replace(/(\d{2,})\s+(\d{3},)/g, "$1$2")
-    .replace(/\s+/g, " ");
-
-  const matches = cleaned.match(/\d[\d,]*\.\d{2}-?/g);
+  const matches = raw.match(/\d[\d\s,]*\.\d{2}-?/g);
   if (!matches || matches.length < 2) return null;
 
   const amountRaw = matches[0];
-  const balanceRaw = matches[1];
+  const balanceRaw = matches[matches.length - 1];
 
   const amount = cleanStandardBankMoneyToken(amountRaw);
   const balance = cleanStandardBankMoneyToken(balanceRaw);
@@ -288,16 +350,24 @@ function extractStandardBankMoneyPair(line) {
   if (amount === null || balance === null) return null;
 
   if (Math.abs(amount) > 1_000_000) return null;
-  if (Math.abs(balance) > 10_000_000) return null;
+  if (Math.abs(balance) > 100_000_000) return null;
 
   return { amount, balance };
 }
 
+/* =========================
+   FUNCTION: isStandardBankMarkerLine
+   PURPOSE: Detect marker lines like "##".
+========================= */
 function isStandardBankMarkerLine(line) {
   const v = normalizeWhitespace(line);
   return v === "##";
 }
 
+/* =========================
+   FUNCTION: isStandardBankHeaderOrNoise
+   PURPOSE: Filter header/footer/noise lines from Standard Bank parsing.
+========================= */
 function isStandardBankHeaderOrNoise(line) {
   const v = normalizeWhitespace(line).toLowerCase();
   if (!v) return true;
@@ -331,6 +401,10 @@ function isStandardBankHeaderOrNoise(line) {
   );
 }
 
+/* =========================
+   FUNCTION: isStandardBankReferenceLine
+   PURPOSE: Decide whether a line is likely to be a transaction reference/detail line.
+========================= */
 function isStandardBankReferenceLine(line) {
   const v = normalizeWhitespace(line);
   if (!v) return false;
@@ -347,6 +421,10 @@ function isStandardBankReferenceLine(line) {
   );
 }
 
+/* =========================
+   FUNCTION: extractStandardBankDate
+   PURPOSE: Extract dd/mm/yyyy from embedded Standard Bank reference strings.
+========================= */
 function extractStandardBankDate(value) {
   const text = normalizeWhitespace(value);
 
@@ -371,6 +449,10 @@ function extractStandardBankDate(value) {
   return null;
 }
 
+/* =========================
+   FUNCTION: shouldSkipStandardBankBlock
+   PURPOSE: Skip fee separator/noise blocks that should not become transactions.
+========================= */
 function shouldSkipStandardBankBlock(description, reference) {
   const desc = normalizeWhitespace(description).toLowerCase();
   const ref = normalizeWhitespace(reference).toLowerCase();
@@ -391,6 +473,13 @@ function shouldSkipStandardBankBlock(description, reference) {
   return false;
 }
 
+/* =========================
+   FUNCTION: extractStandardBankTransactions
+   PURPOSE: Extract Standard Bank transactions using 3-line block logic:
+   - previous line = description
+   - current line = amount + balance
+   - next line = reference/detail
+========================= */
 function extractStandardBankTransactions(text) {
   const lines = String(text)
     .split(/\r?\n/)
@@ -466,6 +555,10 @@ function extractStandardBankTransactions(text) {
    ROUTER
 ========================= */
 
+/* =========================
+   FUNCTION: extractTransactionsBySubtype
+   PURPOSE: Route extraction to the correct bank parser.
+========================= */
 function extractTransactionsBySubtype(text, subtype) {
   if (subtype === "standard_bank_statement") {
     return extractStandardBankTransactions(text);
@@ -478,6 +571,10 @@ function extractTransactionsBySubtype(text, subtype) {
    ENTRY
 ========================= */
 
+/* =========================
+   FUNCTION: extractBankStatement
+   PURPOSE: Main entry point for the bank statement extractor plugin.
+========================= */
 export async function extractBankStatement(context) {
   const {
     file,
