@@ -176,7 +176,10 @@ router.post(
         extractionMeta: extraction.meta
       });
 
-      return res.status(200).json(result);
+      return res.status(200).json({
+  ...result,
+  debugTextPreview: extraction.text.slice(0, 5000),
+});
     } catch (error) {
       console.error("YOUSCAN 2.0 TEST ROUTE ERROR:", error);
       return res.status(500).json({
