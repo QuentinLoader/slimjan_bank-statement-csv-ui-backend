@@ -247,118 +247,200 @@ function extractAbsaTransactions(text) {
    STANDARD BANK
 ========================= */
 
-function parseStandardBankSignedMoney(raw) {
-  if (!raw) return null;
+function cleanStandardBankMoneyToken(value) {
+  if (!value) return null;
 
-  const trimmed = String(raw).trim();
-  const isNegative = trimmed.endsWith("-");
-  const numeric = parseMoney(trimmed.replace(/-$/, ""));
+  let token = String(value)
+    .replace(/\s+/g, "")
+    .replace(/,/g, "")
+    .trim();
 
-  if (numeric === null) return null;
-  return isNegative ? -Math.abs(numeric) : Math.abs(numeric);
-}
-
-function looksLikeStandardBankAmountBalanceLine(line) {
-  const matches = [...String(line).matchAll(/\d[\d,\s]*\.\d{2}-?/g)];
-  return matches.length >= 2;
-}
-
-function extractStandardBankDateFromText(text) {
-  const value = String(text || "").trim();
-
-  let match = value.match(/\b(\d{2})[\/-](\d{2})[\/-](\d{2,4})\b/);
-  if (match) {
-    let year = match[3];
-    if (year.length === 2) year = `20${year}`;
-    return `${match[1]}/${match[2]}/${year}`;
+  let negative = false;
+  if (token.endsWith("-")) {
+    negative = true;
+    token = token.slice(0, -1);
   }
 
-  match = value.match(/\b(\d{2})(\d{2})(\d{2})\b/);
+  if (!/^\d+(\.\d{2})?$/.test(token)) return null;
+
+  const num = Number(token);
+  if (Number.isNaN(num)) return null;
+
+  return negative ? -num : num;
+}
+
+function extractStandardBankMoneyPair(line) {
+  const compact = String(line || "").replace(/\s+/g, " ").trim();
+  if (!compact) return null;
+
+  const matches = [...compact.matchAll(/\d[\d,\s]*\.\d{2}-?/g)].map((m) => m[0]);
+  if (matches.length < 2) return null;
+
+  const amount = cleanStandardBankMoneyToken(matches[0]);
+  const balance = cleanStandardBankMoneyToken(matches[1]);
+
+  if (amount === null || balance === null) return null;
+
+  return { amount, balance };
+}
+
+function isStandardBankMarkerLine(line) {
+  const v = normalizeWhitespace(line);
+  return v === "##";
+}
+
+function isStandardBankHeaderOrNoise(line) {
+  const v = normalizeWhitespace(line).toLowerCase();
+  if (!v) return true;
+
+  return (
+    v === "details" ||
+    v === "service" ||
+    v === "fee" ||
+    v === "debitscredits" ||
+    v === "datebalance" ||
+    v === "balance brought forward" ||
+    v === "month-end balance" ||
+    v.startsWith("page ") ||
+    v.includes("customer care centre") ||
+    v.includes("statement / invoice") ||
+    v.includes("bank statement / tax invoice") ||
+    v.includes("account number") ||
+    v.includes("standard bank") ||
+    v.includes("the ombudsman for banking services") ||
+    v.includes("registered credit provider") ||
+    v.includes("please verify all transactions") ||
+    v.includes("please visit our website") ||
+    v.includes("vat reg no") ||
+    v.includes("monthly email") ||
+    v.includes("mall at carnival") ||
+    v.includes("marshalltown") ||
+    v.includes("achieva current account") ||
+    v.includes("mr. ja loader") ||
+    v.includes("5 kiaat st") ||
+    v.includes("dalpark")
+  );
+}
+
+function isStandardBankReferenceLine(line) {
+  const v = normalizeWhitespace(line);
+  if (!v) return false;
+  if (isStandardBankMarkerLine(v)) return false;
+  if (isStandardBankHeaderOrNoise(v)) return false;
+  if (extractStandardBankMoneyPair(v)) return false;
+
+  return (
+    /\b\d{6}\b/.test(v) ||
+    /\bROL\d{6}\b/i.test(v) ||
+    /\b\d{8,}\b/.test(v) ||
+    /\bSBSA\b/i.test(v) ||
+    /\bVODACOM\b/i.test(v) ||
+    /\bLENDPLUS\b/i.test(v) ||
+    /\bAUTOPAY\b/i.test(v) ||
+    /\bMBD\b/i.test(v) ||
+    /\bRTD-NOT PROVIDED FOR\b/i.test(v)
+  );
+}
+
+function extractStandardBankDate(value) {
+  const text = normalizeWhitespace(value);
+
+  let match = text.match(/\bROL(\d{2})(\d{2})(\d{2})\b/i);
   if (match) {
-    return `${match[1]}/${match[2]}/20${match[3]}`;
+    const dd = match[1];
+    const mm = match[2];
+    const yy = Number(match[3]);
+    const yyyy = yy <= 49 ? 2000 + yy : 1900 + yy;
+    return `${dd}/${mm}/${yyyy}`;
+  }
+
+  match = text.match(/\b(\d{2})(\d{2})(\d{2})\b/);
+  if (match) {
+    const dd = match[1];
+    const mm = match[2];
+    const yy = Number(match[3]);
+    const yyyy = yy <= 49 ? 2000 + yy : 1900 + yy;
+    return `${dd}/${mm}/${yyyy}`;
   }
 
   return null;
 }
 
-function isLikelyStandardBankNoise(line) {
-  const lower = String(line || "").trim().toLowerCase();
-  if (!lower) return true;
+function shouldSkipStandardBankBlock(description, reference) {
+  const desc = normalizeWhitespace(description).toLowerCase();
+  const ref = normalizeWhitespace(reference).toLowerCase();
 
-  return (
-    lower === "description" ||
-    lower === "amount balance" ||
-    lower === "amount" ||
-    lower === "balance" ||
-    lower === "debit credit balance" ||
-    lower === "date description amount balance" ||
-    lower.includes("page ") ||
-    lower.includes("standard bank") ||
-    lower.includes("closing balance") ||
-    lower.includes("opening balance") ||
-    lower.includes("statement period")
-  );
+  if (!desc) return true;
+  if (desc === "##") return true;
+
+  if (
+    desc === "fee-unpaid item" ||
+    desc === "unpaid fee debicheck d/o" ||
+    desc.includes("these fees include vat")
+  ) {
+    return true;
+  }
+
+  if (ref === "##") return true;
+
+  return false;
 }
 
 function extractStandardBankTransactions(text) {
   const lines = String(text)
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map((line) => normalizeWhitespace(line))
     .filter(Boolean);
 
   const transactions = [];
 
   for (let i = 0; i < lines.length; i++) {
-    const currentLine = lines[i];
+    const moneyPair = extractStandardBankMoneyPair(lines[i]);
+    if (!moneyPair) continue;
 
-    if (!looksLikeStandardBankAmountBalanceLine(currentLine)) continue;
+    let description = "";
+    let reference = "";
 
-    const moneyMatches = [
-      ...currentLine.matchAll(/\d[\d,\s]*\.\d{2}-?/g),
-    ].map((m) => ({
-      value: m[0],
-      index: m.index,
-    }));
+    for (let j = i - 1; j >= 0; j--) {
+      const candidate = lines[j];
 
-    if (moneyMatches.length < 2) continue;
+      if (isStandardBankMarkerLine(candidate)) continue;
+      if (extractStandardBankMoneyPair(candidate)) break;
+      if (isStandardBankHeaderOrNoise(candidate)) continue;
 
-    const amountRaw = moneyMatches[0].value;
-    const balanceRaw = moneyMatches[1].value;
-
-    const amount = parseStandardBankSignedMoney(amountRaw);
-    const balance = parseStandardBankSignedMoney(balanceRaw);
-
-    if (amount === null || balance === null) continue;
-
-    const descriptionParts = [];
-    const previousLine = i > 0 ? lines[i - 1] : "";
-    const nextLine = i + 1 < lines.length ? lines[i + 1] : "";
-
-    if (previousLine && !isLikelyStandardBankNoise(previousLine)) {
-      descriptionParts.push(previousLine);
+      description = candidate;
+      break;
     }
 
-    if (
-      nextLine &&
-      !isLikelyStandardBankNoise(nextLine) &&
-      !looksLikeStandardBankAmountBalanceLine(nextLine)
-    ) {
-      descriptionParts.push(nextLine);
+    for (let j = i + 1; j < lines.length; j++) {
+      const candidate = lines[j];
+
+      if (isStandardBankMarkerLine(candidate)) continue;
+      if (extractStandardBankMoneyPair(candidate)) break;
+      if (isStandardBankHeaderOrNoise(candidate)) continue;
+
+      reference = candidate;
+      break;
     }
 
-    const description = normalizeWhitespace(descriptionParts.join(" "));
-    if (!description) continue;
+    if (shouldSkipStandardBankBlock(description, reference)) {
+      continue;
+    }
+
+    const mergedDescription = normalizeWhitespace(
+      reference ? `${description} ${reference}` : description
+    );
 
     const date =
-      extractStandardBankDateFromText(nextLine) ||
-      extractStandardBankDateFromText(previousLine) ||
-      extractStandardBankDateFromText(description);
+      extractStandardBankDate(reference) ||
+      extractStandardBankDate(description) ||
+      null;
 
     transactions.push({
       date,
-      description,
-      amount,
-      balance,
+      description: mergedDescription,
+      amount: Number(moneyPair.amount.toFixed(2)),
+      balance: Number(moneyPair.balance.toFixed(2)),
     });
   }
 
