@@ -80,6 +80,28 @@ function looksLikeTransactionLine(line) {
   return /^\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?/.test(line.trim());
 }
 
+function shouldSkipNoImpactRow(description, amount, currentBalance, previousBalance) {
+  const lower = String(description).toLowerCase();
+
+  const likelyNonPosting =
+    lower.includes("proof of pmt email") ||
+    lower.includes("notific fee") ||
+    lower.includes("smsnotifyme");
+
+  if (
+    likelyNonPosting &&
+    typeof currentBalance === "number" &&
+    typeof previousBalance === "number" &&
+    currentBalance === previousBalance
+  ) {
+    return true;
+  }
+
+  if (amount === 0) return true;
+
+  return false;
+}
+
 function extractTransactions(text) {
   const lines = String(text)
     .split(/\r?\n/)
@@ -113,7 +135,7 @@ function extractTransactions(text) {
     let amount = parseMoney(amountMatch.value);
     const balance = parseMoney(balanceMatch.value);
 
-    if (amount === null) continue;
+    if (amount === null || balance === null) continue;
 
     const descLower = description.toLowerCase();
 
@@ -130,17 +152,34 @@ function extractTransactions(text) {
       descLower.includes("debit") ||
       descLower.includes("pmt");
 
-    // Credit overrides debit-style keywords
+    // Initial sign guess
     if (isCredit) {
       amount = Math.abs(amount);
     } else if (isDebit) {
       amount = -Math.abs(amount);
     }
 
-    // Ignore clearly invalid zero rows
-    if (amount === 0) {
-      continue;
+    // Balance-driven correction
+    if (transactions.length > 0) {
+      const prev = transactions[transactions.length - 1];
+
+      if (
+        typeof prev.balance === "number" &&
+        typeof balance === "number"
+      ) {
+        const diff = Number((balance - prev.balance).toFixed(2));
+
+        if (diff !== 0) {
+          amount = diff;
+        }
+
+        if (shouldSkipNoImpactRow(description, amount, balance, prev.balance)) {
+          continue;
+        }
+      }
     }
+
+    if (amount === 0) continue;
 
     transactions.push({
       date,
