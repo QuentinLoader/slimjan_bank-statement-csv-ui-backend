@@ -44,7 +44,7 @@ function isValidDateString(value) {
    FUNCTION: extractDateFromDescription
    PURPOSE: Recover embedded Standard Bank dates from description text.
 ========================= */
-function extractDateFromDescription(description) {
+function extractDateFromDescription(description, statementEndYear = 2026) {
   const text = String(description || "").trim();
 
   let match = text.match(/ROL(\d{2})(\d{2})(\d{2})/i);
@@ -52,7 +52,7 @@ function extractDateFromDescription(description) {
     const dd = match[1];
     const mm = match[2];
     const yy = Number(match[3]);
-    const yyyy = yy <= 49 ? 2000 + yy : 1900 + yy;
+    const yyyy = resolveYear(yy, statementEndYear);
     return `${dd}/${mm}/${yyyy}`;
   }
 
@@ -64,19 +64,8 @@ function extractDateFromDescription(description) {
     const yy = Number(token.slice(4, 6));
 
     if (dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12) {
-      return `${token.slice(0, 2)}/${token.slice(2, 4)}/${yy <= 49 ? 2000 + yy : 1900 + yy}`;
-    }
-  }
-
-  match = text.match(/\b(\d{6})\b/);
-  if (match) {
-    const token = match[1];
-    const dd = Number(token.slice(0, 2));
-    const mm = Number(token.slice(2, 4));
-    const yy = Number(token.slice(4, 6));
-
-    if (dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12) {
-      return `${token.slice(0, 2)}/${token.slice(2, 4)}/${yy <= 49 ? 2000 + yy : 1900 + yy}`;
+      const yyyy = resolveYear(yy, statementEndYear);
+      return `${token.slice(0, 2)}/${token.slice(2, 4)}/${yyyy}`;
     }
   }
 
