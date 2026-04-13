@@ -65,10 +65,77 @@ function extractStatementPeriod(text) {
   };
 }
 
+function parseMoney(value) {
+  if (!value) return null;
+
+  const cleaned = String(value)
+    .replace(/\s+/g, "")
+    .replace(/,/g, "");
+
+  const number = Number(cleaned);
+  return Number.isNaN(number) ? null : number;
+}
+
+function looksLikeTransactionLine(line) {
+  return /^\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?/.test(line.trim());
+}
+
+function extractTransactions(text) {
+  const lines = String(text)
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const transactions = [];
+
+  for (const line of lines) {
+    if (!looksLikeTransactionLine(line)) continue;
+
+    const dateMatch = line.match(/^(\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?)/);
+    if (!dateMatch) continue;
+
+    const date = dateMatch[1];
+    const rest = line.slice(date.length).trim();
+
+    // Capture money-like values, assuming amount + balance near the end
+    const moneyMatches = [...rest.matchAll(/-?\d[\d,]*\.\d{2}/g)].map(m => ({
+      value: m[0],
+      index: m.index,
+    }));
+
+    if (moneyMatches.length < 2) continue;
+
+    const amountMatch = moneyMatches[moneyMatches.length - 2];
+    const balanceMatch = moneyMatches[moneyMatches.length - 1];
+
+    const description = rest.slice(0, amountMatch.index).trim();
+    const amount = parseMoney(amountMatch.value);
+    const balance = parseMoney(balanceMatch.value);
+
+    if (!description || amount === null) continue;
+
+    transactions.push({
+      date,
+      description,
+      amount,
+      balance,
+    });
+  }
+
+  return transactions;
+}
+
 export async function extractBankStatement(context) {
-  const { file, classification, extractedText = "", textPreview = "", extractionMeta = null } = context;
+  const {
+    file,
+    classification,
+    extractedText = "",
+    textPreview = "",
+    extractionMeta = null
+  } = context;
 
   const period = extractStatementPeriod(extractedText);
+  const transactions = extractTransactions(extractedText);
 
   return {
     sourceFileName: file?.originalname || "unknown.pdf",
@@ -85,6 +152,6 @@ export async function extractBankStatement(context) {
       openingBalance: extractBalance("opening balance", extractedText),
       closingBalance: extractBalance("closing balance", extractedText),
     },
-    transactions: [],
+    transactions,
   };
 }
