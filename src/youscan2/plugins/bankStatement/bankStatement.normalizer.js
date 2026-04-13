@@ -3,32 +3,182 @@
  * Bank statement normalizer
  */
 
+/* =========================
+   FUNCTION: mapSubtypeToBankName
+   PURPOSE: Map document subtype to display bank name.
+========================= */
 function mapSubtypeToBankName(subtype) {
   if (!subtype) return "unknown";
 
-  if (subtype.includes("absa")) return "ABSA";
-  if (subtype.includes("fnb")) return "FNB";
-  if (subtype.includes("nedbank")) return "Nedbank";
-  if (subtype.includes("capitec")) return "Capitec";
-  if (subtype.includes("discovery")) return "Discovery";
+  const value = String(subtype).toLowerCase();
+
+  if (value.includes("absa")) return "ABSA";
+  if (value.includes("fnb")) return "FNB";
+  if (value.includes("nedbank")) return "Nedbank";
+  if (value.includes("capitec")) return "Capitec";
+  if (value.includes("discovery")) return "Discovery";
+  if (value.includes("standard_bank")) return "Standard Bank";
+  if (value.includes("standard bank")) return "Standard Bank";
 
   return "unknown";
 }
 
+/* =========================
+   FUNCTION: isValidDateString
+   PURPOSE: Basic dd/mm/yyyy validation.
+========================= */
+function isValidDateString(value) {
+  if (!value) return false;
+
+  const match = String(value).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return false;
+
+  const dd = Number(match[1]);
+  const mm = Number(match[2]);
+  const yyyy = Number(match[3]);
+
+  return dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12 && yyyy >= 2000 && yyyy <= 2100;
+}
+
+/* =========================
+   FUNCTION: extractDateFromDescription
+   PURPOSE: Recover embedded Standard Bank dates from description text.
+========================= */
+function extractDateFromDescription(description) {
+  const text = String(description || "").trim();
+
+  let match = text.match(/ROL(\d{2})(\d{2})(\d{2})/i);
+  if (match) {
+    const dd = match[1];
+    const mm = match[2];
+    const yy = Number(match[3]);
+    const yyyy = yy <= 49 ? 2000 + yy : 1900 + yy;
+    return `${dd}/${mm}/${yyyy}`;
+  }
+
+  match = text.match(/(\d{6})$/);
+  if (match) {
+    const token = match[1];
+    const dd = Number(token.slice(0, 2));
+    const mm = Number(token.slice(2, 4));
+    const yy = Number(token.slice(4, 6));
+
+    if (dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12) {
+      return `${token.slice(0, 2)}/${token.slice(2, 4)}/${yy <= 49 ? 2000 + yy : 1900 + yy}`;
+    }
+  }
+
+  match = text.match(/\b(\d{6})\b/);
+  if (match) {
+    const token = match[1];
+    const dd = Number(token.slice(0, 2));
+    const mm = Number(token.slice(2, 4));
+    const yy = Number(token.slice(4, 6));
+
+    if (dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12) {
+      return `${token.slice(0, 2)}/${token.slice(2, 4)}/${yy <= 49 ? 2000 + yy : 1900 + yy}`;
+    }
+  }
+
+  return null;
+}
+
+/* =========================
+   FUNCTION: shouldRemoveTransaction
+   PURPOSE: Remove Standard Bank mirror/footer/noise rows.
+========================= */
+function shouldRemoveTransaction(description) {
+  const upper = String(description || "").toUpperCase();
+
+  return (
+    upper.includes("RTD-NOT PROVIDED FOR") ||
+    upper === "##" ||
+    upper.includes("FEE-UNPAID ITEM") ||
+    upper.includes("UNPAID FEE DEBICHECK D/O") ||
+    upper.includes("VAT SUMMARY") ||
+    upper.includes("ACCOUNT SUMMARY") ||
+    upper.includes("DETAILS OF AGREEMENT") ||
+    upper.includes("THIS DOCUMENT CONSTITUTES A CREDIT NOTE") ||
+    upper.includes("TOTAL VAT")
+  );
+}
+
+/* =========================
+   FUNCTION: normalizeTransaction
+   PURPOSE: Apply transaction-level cleanup rules.
+========================= */
+function normalizeTransaction(tx) {
+  const description = tx?.description || "";
+  const upper = String(description).toUpperCase();
+
+  const normalized = {
+    date: tx?.date || null,
+    description,
+    amount: typeof tx?.amount === "number" ? tx.amount : null,
+    balance: typeof tx?.balance === "number" ? tx.balance : null,
+  };
+
+  if (!isValidDateString(normalized.date)) {
+    normalized.date = extractDateFromDescription(description);
+  }
+
+  if (
+    normalized.amount != null &&
+    upper.includes("CREDIT") &&
+    !upper.includes("DEBIT") &&
+    !upper.includes("DEBIT ORDER")
+  ) {
+    normalized.amount = Math.abs(normalized.amount);
+  }
+
+  return normalized;
+}
+
+/* =========================
+   FUNCTION: normalizeTransactions
+   PURPOSE: Normalize and filter transaction array.
+========================= */
+function normalizeTransactions(transactions, subtype) {
+  const list = Array.isArray(transactions) ? transactions : [];
+  const isStandardBank =
+    String(subtype || "").toLowerCase().includes("standard_bank") ||
+    String(subtype || "").toLowerCase().includes("standard bank");
+
+  const normalized = [];
+
+  for (const tx of list) {
+    if (!tx) continue;
+
+    if (isStandardBank && shouldRemoveTransaction(tx.description)) {
+      continue;
+    }
+
+    normalized.push(normalizeTransaction(tx));
+  }
+
+  return normalized;
+}
+
+/* =========================
+   FUNCTION: normalizeBankStatement
+   PURPOSE: Normalize extractor output into final bank statement shape.
+========================= */
 export async function normalizeBankStatement(raw) {
   const metadata = raw?.metadata || {};
+  const subtype = raw?.detectedSubtype || metadata.bankName || "";
+  const bankName = metadata.bankName && metadata.bankName !== "unknown"
+    ? mapSubtypeToBankName(metadata.bankName)
+    : mapSubtypeToBankName(subtype);
 
   return {
-    bankName: metadata.bankName
-      ? mapSubtypeToBankName(metadata.bankName)
-      : "unknown",
+    bankName,
     accountNumber: metadata.accountNumber || null,
     clientName: metadata.clientName || null,
     statementPeriodStart: metadata.statementPeriodStart || null,
     statementPeriodEnd: metadata.statementPeriodEnd || null,
     openingBalance: metadata.openingBalance ?? null,
     closingBalance: metadata.closingBalance ?? null,
-    transactions: raw?.transactions || [],
+    transactions: normalizeTransactions(raw?.transactions, subtype),
     sourceFileName: raw?.sourceFileName || null,
   };
 }
