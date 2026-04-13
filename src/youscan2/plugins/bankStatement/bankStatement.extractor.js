@@ -405,12 +405,41 @@ function cleanStandardBankMoneyToken(value) {
 }
 
 /* =========================
+   FUNCTION: buildCombinedBalanceCandidate
+   PURPOSE: Reconstruct OCR-split Standard Bank balance tokens.
+   EXAMPLES:
+   - "01 023,261.42-"   => "01023,261.42-"
+   - "12 1211,382.94-"  => "12121,382.94-"
+========================= */
+function buildCombinedBalanceCandidate(line) {
+  const raw = normalizeWhitespace(line);
+
+  const match = raw.match(/(\d{2})\s+(\d{3,4},\d{3}\.\d{2}-?)\s*$/);
+  if (!match) return null;
+
+  const prefix = match[1];
+  const token = match[2];
+
+  const leadingGroup = token.split(",")[0];
+
+  if (leadingGroup.length === 3) {
+    return `${prefix}${token}`;
+  }
+
+  if (leadingGroup.length === 4) {
+    return `${prefix}${token.slice(1)}`;
+  }
+
+  return null;
+}
+
+/* =========================
    FUNCTION: extractStandardBankMoneyPair
    PURPOSE: Extract amount + balance from a Standard Bank money line.
    CRITICAL:
    - First money token = amount
-   - Last money token = balance
-   - Handles OCR merges better than second-token logic
+   - Balance prefers reconstructed end-of-line candidate when present
+   - Falls back to last money token
 ========================= */
 function extractStandardBankMoneyPair(line) {
   const raw = String(line || "");
@@ -419,10 +448,12 @@ function extractStandardBankMoneyPair(line) {
   if (!matches || matches.length < 2) return null;
 
   const amountRaw = matches[0];
-  const balanceRaw = matches[matches.length - 1];
+  const fallbackBalanceRaw = matches[matches.length - 1];
+  const reconstructedBalanceRaw =
+    buildCombinedBalanceCandidate(raw) || fallbackBalanceRaw;
 
   const amount = cleanStandardBankMoneyToken(amountRaw);
-  const balance = cleanStandardBankMoneyToken(balanceRaw);
+  const balance = cleanStandardBankMoneyToken(reconstructedBalanceRaw);
 
   if (amount === null || balance === null) return null;
 
@@ -531,6 +562,21 @@ function shouldSkipStandardBankBlock(description, reference) {
 }
 
 /* =========================
+   FUNCTION: shouldSkipStandardBankTransaction
+   PURPOSE: Skip obviously corrupted Standard Bank transactions.
+========================= */
+function shouldSkipStandardBankTransaction(tx) {
+  if (!tx) return true;
+
+  if (typeof tx.amount !== "number" || typeof tx.balance !== "number") return true;
+
+  if (Math.abs(tx.amount) > 5_000_000) return true;
+  if (Math.abs(tx.balance) > 100_000_000) return true;
+
+  return false;
+}
+
+/* =========================
    FUNCTION: extractStandardBankTransactions
    PURPOSE: Extract Standard Bank transactions using 3-line block logic:
    - previous line = description
@@ -572,8 +618,7 @@ function extractStandardBankTransactions(text) {
         next &&
         !isStandardBankMarkerLine(next) &&
         !isStandardBankHeaderOrNoise(next) &&
-        !extractStandardBankMoneyPair(next) &&
-        isStandardBankReferenceLine(next)
+        !extractStandardBankMoneyPair(next)
       ) {
         reference = next;
       }
@@ -588,24 +633,26 @@ function extractStandardBankTransactions(text) {
     );
 
     const date =
+      extractStandardBankDate(mergedDescription) ||
       extractStandardBankDate(reference) ||
       extractStandardBankDate(description) ||
       null;
 
-    transactions.push({
+    const tx = {
       date,
       description: mergedDescription,
       amount: Number(moneyPair.amount.toFixed(2)),
       balance: Number(moneyPair.balance.toFixed(2)),
-    });
+    };
+
+    if (shouldSkipStandardBankTransaction(tx)) {
+      continue;
+    }
+
+    transactions.push(tx);
   }
 
-  return applyBalanceDrivenCorrection(transactions).map((tx) => ({
-    date: tx.date,
-    description: tx.description,
-    amount: Number(tx.amount.toFixed(2)),
-    balance: Number(tx.balance.toFixed(2)),
-  }));
+  return transactions;
 }
 
 /* =========================
