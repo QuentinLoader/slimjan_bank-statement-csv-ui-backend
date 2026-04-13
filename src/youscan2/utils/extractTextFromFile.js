@@ -23,6 +23,7 @@ export async function extractTextFromFile(file) {
 
   if (isPdf) {
     const result = await pdfParse(file.buffer);
+
     return {
       text: result.text || "",
       meta: {
