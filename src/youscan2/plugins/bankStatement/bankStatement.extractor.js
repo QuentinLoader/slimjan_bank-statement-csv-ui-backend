@@ -422,33 +422,16 @@ function cleanStandardBankMoneyToken(value) {
    - "01 023,261.42-"   => "01 023,261.42-"
    - "12 1211,382.94-"  => "12 1211,382.94-"
 ========================= */
-function buildCombinedBalanceCandidate(line) {
+ function buildCombinedBalanceCandidate(line) {
   const raw = normalizeWhitespace(line);
 
-  // Capture optional 1-2 digit prefix + final balance token at end of line
-  const match = raw.match(/(?:^|\s)(\d{1,2})?\s*(\d{3,4},\d{3}\.\d{2}-?)\s*$/);
-  if (!match) return null;
+  // Extract ONLY the LAST valid money token
+  const matches = raw.match(/\d{1,4},\d{3}\.\d{2}-?/g);
 
-  const prefix = match[1] || "";
-  const token = match[2];
+  if (!matches || matches.length === 0) return null;
 
-  // If there is no prefix, just return the token
-  if (!prefix) return token;
-
-  // Rebuild as "prefix + token"
-  // Example: prefix=12 token=1211,382.94- => 121211,382.94- (wrong if naively concatenated)
-  // We only want to prepend when OCR split the left-most thousands group.
-  const leadingGroup = token.split(",")[0];
-
-  // Typical valid cases:
-  // 023,261.42- with prefix 01 => 01 023,261.42-
-  // 221,902.94- with prefix 12 => 12 221,902.94-
-  // 1211,382.94- with prefix 12 => 12 1211,382.94- (OCR corruption case)
-  if (leadingGroup.length === 3 || leadingGroup.length === 4) {
-    return `${prefix} ${token}`;
-  }
-
-  return token;
+  // The TRUE balance is always the last one
+  return matches[matches.length - 1];
 }
 
 /* =========================
