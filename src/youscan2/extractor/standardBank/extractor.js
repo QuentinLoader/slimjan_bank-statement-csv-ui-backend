@@ -124,6 +124,19 @@ function shouldSkipStandardBankTransaction(tx) {
   return false;
 }
 
+function isStandaloneFeeDescription(description) {
+  const upper = normalizeWhitespace(description).toUpperCase();
+
+  return (
+    upper === "EXCESS INTEREST" ||
+    upper === "SERVICE CHARGE" ||
+    upper === "OVERDRAFT SERVICE FEE NO-LIMIT" ||
+    upper === "FIXED MONTHLY FEE" ||
+    upper === "OVERDRAFT SERVICE FEE" ||
+    upper === "SERVICE CHARGE SBMOBILE"
+  );
+}
+
 function getStandardBankDescription(lines, i) {
   const prev = lines[i - 1];
   if (!prev) return "";
@@ -198,45 +211,7 @@ function isStandardBankReversedTransaction(lines, i) {
   return false;
 }
 
-function reconcileStandardBankTransactions(transactions) {
-  if (!Array.isArray(transactions) || transactions.length === 0) return [];
-
-  const reconciled = [];
-
-  for (let i = 0; i < transactions.length; i++) {
-    const tx = { ...transactions[i] };
-
-    if (i === 0) {
-      reconciled.push(tx);
-      continue;
-    }
-
-    const prev = reconciled[i - 1];
-
-    if (
-      typeof prev?.balance === "number" &&
-      Number.isFinite(prev.balance) &&
-      typeof tx?.amount === "number" &&
-      Number.isFinite(tx.amount)
-    ) {
-      const expectedBalance = Number((prev.balance + tx.amount).toFixed(2));
-
-      if (
-        typeof tx.balance !== "number" ||
-        !Number.isFinite(tx.balance) ||
-        Number(tx.balance.toFixed(2)) !== expectedBalance
-      ) {
-        tx.balance = expectedBalance;
-      }
-    }
-
-    reconciled.push(tx);
-  }
-
-  return reconciled;
-}
-
-export function deriveStandardBankOpeningBalanceFromFirstTransaction(transactions) {
+function deriveStartingBalance(transactions) {
   if (!Array.isArray(transactions) || transactions.length === 0) return null;
 
   const first = transactions[0];
@@ -250,6 +225,56 @@ export function deriveStandardBankOpeningBalanceFromFirstTransaction(transaction
   }
 
   return Number((first.balance - first.amount).toFixed(2));
+}
+
+function reconcileStandardBankTransactions(transactions) {
+  if (!Array.isArray(transactions) || transactions.length === 0) return [];
+
+  const startingBalance = deriveStartingBalance(transactions);
+  if (startingBalance == null) return transactions;
+
+  const reconciled = [];
+  let runningBalance = startingBalance;
+
+  for (let i = 0; i < transactions.length; i++) {
+    const tx = { ...transactions[i] };
+
+    if (typeof tx.amount !== "number" || !Number.isFinite(tx.amount)) {
+      continue;
+    }
+
+    runningBalance = Number((runningBalance + tx.amount).toFixed(2));
+    tx.balance = runningBalance;
+
+    reconciled.push(tx);
+  }
+
+  return reconciled;
+}
+
+function carryForwardDates(transactions) {
+  if (!Array.isArray(transactions) || transactions.length === 0) return [];
+
+  let lastKnownDate = null;
+
+  return transactions.map((tx) => {
+    const next = { ...tx };
+
+    if (next.date) {
+      lastKnownDate = next.date;
+      return next;
+    }
+
+    if (lastKnownDate) {
+      next.date = lastKnownDate;
+    }
+
+    return next;
+  });
+}
+
+export function deriveStandardBankOpeningBalanceFromFirstTransaction(transactions) {
+  return deriveStartingBalance(transactions);
 }
 
 export function extractStandardBankTransactions(text, statementPeriod = null) {
@@ -289,12 +314,14 @@ export function extractStandardBankTransactions(text, statementPeriod = null) {
       upper.includes("ACCOUNT SUMMARY") ||
       upper.includes("DETAILS OF AGREEMENT") ||
       upper.includes("THIS DOCUMENT CONSTITUTES A CREDIT NOTE") ||
-      upper.includes("TOTAL VAT")
+      upper.includes("TOTAL VAT") ||
+      upper === "FEE-UNPAID ITEM" ||
+      upper === "UNPAID FEE DEBICHECK D/O"
     ) {
       continue;
     }
 
-    const date =
+    let date =
       extractStandardBankDate(mergedDescription, statementPeriod) ||
       extractStandardBankDate(reference, statementPeriod) ||
       extractStandardBankDate(description, statementPeriod) ||
@@ -312,5 +339,6 @@ export function extractStandardBankTransactions(text, statementPeriod = null) {
     transactions.push(tx);
   }
 
-  return reconcileStandardBankTransactions(transactions);
+  const reconciled = reconcileStandardBankTransactions(transactions);
+  return carryForwardDates(reconciled);
 }
