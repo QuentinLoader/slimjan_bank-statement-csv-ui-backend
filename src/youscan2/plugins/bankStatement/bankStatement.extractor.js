@@ -109,7 +109,34 @@ function extractTransactions(text) {
     const balanceMatch = moneyMatches[moneyMatches.length - 1];
 
     const description = rest.slice(0, amountMatch.index).trim();
-    const amount = parseMoney(amountMatch.value);
+    let amount = parseMoney(amountMatch.value);
+
+// Determine sign from description
+const descLower = description.toLowerCase();
+
+const isDebit =
+  descLower.includes("fee") ||
+  descLower.includes("charge") ||
+  descLower.includes("pmt") ||
+  descLower.includes("payment") ||
+  descLower.includes("withdrawal");
+
+const isCredit =
+  descLower.includes("credit") ||
+  descLower.includes("deposit");
+
+if (isDebit && amount > 0) {
+  amount = -Math.abs(amount);
+}
+
+if (isCredit && amount < 0) {
+  amount = Math.abs(amount);
+}
+
+// Ignore clearly invalid zero rows
+if (amount === 0) {
+  continue;
+}
     const balance = parseMoney(balanceMatch.value);
 
     if (!description || amount === null) continue;
