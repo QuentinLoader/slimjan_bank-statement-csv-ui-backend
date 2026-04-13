@@ -563,10 +563,33 @@ function isStandardBankReferenceLine(line) {
 
 /* =========================
    FUNCTION: extractStandardBankDate
-   PURPOSE: Extract dd/mm/yyyy from Standard Bank reference text.
+   PURPOSE:
+   Extract dd/mm/yyyy from Standard Bank reference text.
+   IMPROVEMENT:
+   - Handles ROL format
+   - Handles embedded 6-digit dates at end of strings
 ========================= */
 function extractStandardBankDate(value) {
-  return normalizeDateToken(value);
+  const text = normalizeWhitespace(value || "");
+
+  let match = text.match(/ROL(\d{2})(\d{2})(\d{2})/);
+  if (match) {
+    return `${match[1]}/${match[2]}/20${match[3]}`;
+  }
+
+  match = text.match(/(\d{6})$/);
+  if (match) {
+    const d = match[1];
+    return `${d.slice(0, 2)}/${d.slice(2, 4)}/20${d.slice(4)}`;
+  }
+
+  match = text.match(/\b(\d{6})\b/);
+  if (match) {
+    const d = match[1];
+    return `${d.slice(0, 2)}/${d.slice(2, 4)}/20${d.slice(4)}`;
+  }
+
+  return null;
 }
 
 /* =========================
@@ -663,6 +686,24 @@ function extractStandardBankTransactions(text) {
     const mergedDescription = normalizeWhitespace(
       reference ? `${description} ${reference}` : description
     );
+
+    const upperDescription = mergedDescription.toUpperCase();
+
+    // Remove RTD mirror / reversal rows
+    if (upperDescription.includes("RTD-NOT PROVIDED FOR")) {
+      continue;
+    }
+
+    // Remove footer / summary / legal noise
+    if (
+      upperDescription.includes("VAT SUMMARY") ||
+      upperDescription.includes("ACCOUNT SUMMARY") ||
+      upperDescription.includes("DETAILS OF AGREEMENT") ||
+      upperDescription.includes("THIS DOCUMENT CONSTITUTES A CREDIT NOTE") ||
+      upperDescription.includes("TOTAL VAT")
+    ) {
+      continue;
+    }
 
     const date =
       extractStandardBankDate(mergedDescription) ||
