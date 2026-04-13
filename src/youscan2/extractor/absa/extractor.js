@@ -1,15 +1,9 @@
 import { normalizeWhitespace } from "../shared/utils.js";
-import { parseSignedMoney, parseStandardBankBalanceToken } from "../shared/money.js";
 
 const DATE_AT_START_RE = /^\s*(\d{1,2}\/\d{1,2}\/\d{4})/;
-const ANY_DATE_RE = /\b\d{1,2}\/\d{1,2}\/\d{4}\b/g;
 
-// Broad enough for OCR text like:
-// 844.73
-// 3 844.73
-// 1 382.23
-// 4 000,00-
-const MONEY_TOKEN_RE = /(?<!\d)(\d{1,3}(?:[ ,]\d{3})*[.,]\d{2}-?|\d+[.,]\d{2}-?)(?!\d)/g;
+// ✅ FIXED: safer money token (prevents merging)
+const MONEY_TOKEN_RE = /(\d{1,3}(?:[ ,]\d{3})*[.,]\d{2}-?)/g;
 
 const NOISE_PATTERNS = [
   /authorised financial services provider/i,
@@ -41,6 +35,27 @@ const DROP_DESCRIPTION_PATTERNS = [
   /^notific fee sms/i,
 ];
 
+// ✅ CRITICAL: stop parsing before footer pollution
+function truncateAtStatementEnd(text) {
+  const stopPatterns = [
+    /SERVICE FEE:/i,
+    /CREDIT\s+INTEREST\s+RATE/i,
+    /ABSA BUSINESS BANKING WILL BE UPDATING/i,
+    /Cheque account statement/i,
+  ];
+
+  let cutIndex = text.length;
+
+  for (const pattern of stopPatterns) {
+    const idx = text.search(pattern);
+    if (idx !== -1 && idx < cutIndex) {
+      cutIndex = idx;
+    }
+  }
+
+  return text.slice(0, cutIndex);
+}
+
 function isNoiseLine(line) {
   const s = normalizeWhitespace(line || "");
   if (!s) return true;
@@ -53,9 +68,11 @@ function cleanAbsaText(text) {
     .replace(/\r/g, "\n");
 }
 
+// ✅ FIXED: robust money normalization
 function normalizeMoneyToken(raw) {
   if (!raw) return null;
-  let s = String(raw).trim();
+
+  let s = raw.trim();
 
   let negative = false;
   if (s.endsWith("-")) {
@@ -63,10 +80,15 @@ function normalizeMoneyToken(raw) {
     s = s.slice(0, -1);
   }
 
+  // remove spaces BEFORE parsing
   s = s.replace(/\s+/g, "");
-  s = s.replace(/,/g, ".");
 
-  const value = Number.parseFloat(s);
+  // normalize decimal
+  if (s.includes(",") && !s.includes(".")) {
+    s = s.replace(",", ".");
+  }
+
+  const value = parseFloat(s);
   if (!Number.isFinite(value)) return null;
 
   return negative ? -value : value;
@@ -113,40 +135,38 @@ function parseAbsaBlock(block, previousBalance = null) {
 
   if (!money.length) return null;
 
-  // Last clean money token is almost always balance.
   const balance = money[money.length - 1].value;
 
-  // Candidate amount is usually the token immediately before balance.
   let amount = null;
+
   if (money.length >= 2) {
     amount = money[money.length - 2].value;
   } else if (previousBalance != null) {
     amount = Number((balance - previousBalance).toFixed(2));
   }
 
-  // Description is everything after date and before the amount token.
+  // description boundary
   let descriptionEnd = joined.length;
   if (money.length >= 2) {
     descriptionEnd = money[money.length - 2].index;
-  } else if (money.length >= 1) {
+  } else {
     descriptionEnd = money[money.length - 1].index;
   }
 
-  let description = normalizeWhitespace(
-    joined
-      .slice(dateMatch[0].length, descriptionEnd)
-      .replace(/\b(?:Settlement|Headoffice)\b/gi, " ")
-      .replace(/\b[ACTMS]\b(?=\s*\d|$)/g, " ")
-  );
-
-  description = description
-    .replace(/\s{2,}/g, " ")
+  let description = joined
+    .slice(dateMatch[0].length, descriptionEnd)
+    .replace(/\b(Settlement|Headoffice)\b/gi, " ")
+    .replace(/\b[ACTMS]\b(?=\s*\d|$)/g, " ")
+    .replace(/SERVICE FEE:.*$/i, "") // ✅ STOP BLEED
+    .replace(/CREDIT INTEREST RATE.*$/i, "") // ✅ STOP BLEED
     .trim();
+
+  description = normalizeWhitespace(description);
 
   if (!description) return null;
   if (DROP_DESCRIPTION_PATTERNS.some((re) => re.test(description))) return null;
 
-  // Fallback sign inference from continuity.
+  // infer correct sign
   if (previousBalance != null && amount != null) {
     const debitCandidate = Number((previousBalance - Math.abs(amount)).toFixed(2));
     const creditCandidate = Number((previousBalance + Math.abs(amount)).toFixed(2));
@@ -160,21 +180,28 @@ function parseAbsaBlock(block, previousBalance = null) {
     }
   }
 
+  // ✅ GUARDRAILS (kill corrupted rows)
+  if (!amount || !balance) return null;
+
+  if (Math.abs(amount) > 100000) return null;
+  if (Math.abs(balance) > 10000000) return null;
+
   return {
     date,
     description,
-    amount: amount != null ? Number(amount.toFixed(2)) : null,
+    amount: Number(amount.toFixed(2)),
     balance: Number(balance.toFixed(2)),
   };
 }
 
 export function extractAbsaTransactions(text, openingBalance = null) {
-  const cleaned = cleanAbsaText(text);
+  // ✅ APPLY TRUNCATION
+  const cleaned = truncateAtStatementEnd(cleanAbsaText(text));
+
   const lines = cleaned.split("\n");
-
   const blocks = splitIntoTransactionBlocks(lines);
-  const transactions = [];
 
+  const transactions = [];
   let previousBalance = openingBalance;
 
   for (const block of blocks) {
