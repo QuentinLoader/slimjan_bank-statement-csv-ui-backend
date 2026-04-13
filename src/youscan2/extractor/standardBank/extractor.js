@@ -217,11 +217,10 @@ function deriveStartingBalance(transactions) {
 function reconcileStandardBankTransactions(transactions) {
   if (!Array.isArray(transactions) || transactions.length === 0) return [];
 
-  const startingBalance = deriveStartingBalance(transactions);
-  if (startingBalance == null) return transactions;
-
   const reconciled = [];
-  let runningBalance = startingBalance;
+
+  // 🔥 Start from ZERO (NOT from OCR)
+  let runningBalance = 0;
 
   for (let i = 0; i < transactions.length; i++) {
     const tx = { ...transactions[i] };
@@ -231,6 +230,7 @@ function reconcileStandardBankTransactions(transactions) {
     }
 
     runningBalance = Number((runningBalance + tx.amount).toFixed(2));
+
     tx.balance = runningBalance;
 
     reconciled.push(tx);
