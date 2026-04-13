@@ -8,7 +8,7 @@ import { classifyDocument } from "../classifier/classifyDocument.js";
 import { getParserByKey } from "../registry/parserRegistry.js";
 import { getActiveSchemaForDocumentType } from "../registry/schemaRegistry.js";
 
-export async function runParseJob({ file, extractedText = "" }) {
+export async function runParseJob({ file, extractedText = "", extractionMeta = null }) {
   const jobId = crypto.randomUUID();
 
   const classification = await classifyDocument({
@@ -23,6 +23,7 @@ export async function runParseJob({ file, extractedText = "" }) {
       classification,
       schema: null,
       result: null,
+      extractionMeta,
       message: `Unsupported document type: ${classification.documentType}`,
     };
   }
@@ -36,6 +37,7 @@ export async function runParseJob({ file, extractedText = "" }) {
       classification,
       schema: null,
       result: null,
+      extractionMeta,
       message: `No active schema for document type: ${classification.documentType}`,
     };
   }
@@ -49,6 +51,7 @@ export async function runParseJob({ file, extractedText = "" }) {
       classification,
       schema,
       result: null,
+      extractionMeta,
       message: `No parser found for key: ${schema.parserKey}`,
     };
   }
@@ -57,6 +60,7 @@ export async function runParseJob({ file, extractedText = "" }) {
     jobId,
     file,
     extractedText,
+    extractionMeta,
     textPreview: extractedText.slice(0, 2000),
     classification,
     schema,
@@ -79,6 +83,7 @@ export async function runParseJob({ file, extractedText = "" }) {
     classification,
     schema,
     result: finalResult,
+    extractionMeta,
     message: "YouScan 2.0 parse job completed",
   };
 }

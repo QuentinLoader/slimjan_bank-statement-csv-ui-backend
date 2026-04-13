@@ -9,6 +9,7 @@ import { parseStatement } from "../services/parseStatement.js";
 import { authenticateUser } from "../middleware/auth.middleware.js";
 import { checkPlanAccess } from "../middleware/credits.middleware.js";
 import { runParseJob } from "../youscan2/orchestrator/runParseJob.js";
+import { extractTextFromFile } from "../youscan2/utils/extractTextFromFile.js";
 
 export const router = express.Router();
 
@@ -46,10 +47,6 @@ router.post(
           return res.status(500).json({ error: "PARSER_ERROR" });
         }
 
-        // ===============================
-        // HANDLE PARSER ERROR CODES
-        // ===============================
-
         if (result?.errorCode === "UNSUPPORTED_BANK") {
           return res.status(400).json({
             error: "UNSUPPORTED_BANK",
@@ -84,13 +81,8 @@ router.post(
         allTransactions = [...allTransactions, ...standardized];
       }
 
-      // ===============================
-      // 🔐 ATOMIC BILLING SECTION
-      // ===============================
-
       let creditsDeducted = 0;
 
-      // FREE PLAN
       if (user.plan_code === "FREE") {
         const freeResult = await pool.query(
           `
@@ -113,10 +105,7 @@ router.post(
         }
 
         creditsDeducted = 1;
-      }
-
-      // CREDIT-BASED PLANS
-      else if (user.plan_code !== "PRO_YEAR_UNLIMITED") {
+      } else if (user.plan_code !== "PRO_YEAR_UNLIMITED") {
         const deductionResult = await pool.query(
           `
           UPDATE users
@@ -140,8 +129,6 @@ router.post(
         creditsDeducted = 1;
       }
 
-      // PRO_YEAR_UNLIMITED → no deduction
-
       await pool.query(
         `
         INSERT INTO usage_logs
@@ -164,6 +151,7 @@ router.post(
     }
   }
 );
+
 router.post(
   "/test-youscan2",
   upload.any(),
@@ -177,13 +165,15 @@ router.post(
 
       const file = files[0];
 
-      const extractedText = file.buffer.toString("utf8");
+      const extraction = await extractTextFromFile(file);
 
       const result = await runParseJob({
         file: {
           originalname: file.originalname,
+          mimetype: file.mimetype
         },
-        extractedText,
+        extractedText: extraction.text,
+        extractionMeta: extraction.meta
       });
 
       return res.status(200).json(result);
@@ -191,6 +181,7 @@ router.post(
       console.error("YOUSCAN 2.0 TEST ROUTE ERROR:", error);
       return res.status(500).json({
         error: "YOUSCAN2_TEST_ROUTE_FAILED",
+        message: error.message || "Unknown error"
       });
     }
   }
