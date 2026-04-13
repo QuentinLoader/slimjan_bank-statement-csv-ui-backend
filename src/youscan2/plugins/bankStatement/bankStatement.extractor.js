@@ -270,16 +270,17 @@ function cleanStandardBankMoneyToken(value) {
 }
 
 function extractStandardBankMoneyPair(line) {
-  const compact = String(line || "").replace(/\s+/g, " ").trim();
-  if (!compact) return null;
+  const raw = String(line || "");
 
-  const matches = [...compact.matchAll(/\d[\d,\s]*\.\d{2}-?/g)].map((m) => m[0]);
-  if (matches.length < 2) return null;
+  const matches = raw.match(/\d[\d\s,]*\.\d{2}-?/g);
+  if (!matches || matches.length < 2) return null;
 
   const amount = cleanStandardBankMoneyToken(matches[0]);
   const balance = cleanStandardBankMoneyToken(matches[1]);
 
   if (amount === null || balance === null) return null;
+
+  if (Math.abs(amount) > 1_000_000) return null;
 
   return { amount, balance };
 }
@@ -325,14 +326,10 @@ function isStandardBankHeaderOrNoise(line) {
 function isStandardBankReferenceLine(line) {
   const v = normalizeWhitespace(line);
   if (!v) return false;
-  if (isStandardBankMarkerLine(v)) return false;
-  if (isStandardBankHeaderOrNoise(v)) return false;
-  if (extractStandardBankMoneyPair(v)) return false;
 
   return (
     /\b\d{6}\b/.test(v) ||
     /\bROL\d{6}\b/i.test(v) ||
-    /\b\d{8,}\b/.test(v) ||
     /\bSBSA\b/i.test(v) ||
     /\bVODACOM\b/i.test(v) ||
     /\bLENDPLUS\b/i.test(v) ||
@@ -401,26 +398,31 @@ function extractStandardBankTransactions(text) {
     let description = "";
     let reference = "";
 
-    for (let j = i - 1; j >= 0; j--) {
-      const candidate = lines[j];
+    if (i > 0) {
+      const prev = lines[i - 1];
 
-      if (isStandardBankMarkerLine(candidate)) continue;
-      if (extractStandardBankMoneyPair(candidate)) break;
-      if (isStandardBankHeaderOrNoise(candidate)) continue;
-
-      description = candidate;
-      break;
+      if (
+        prev &&
+        !isStandardBankMarkerLine(prev) &&
+        !isStandardBankHeaderOrNoise(prev) &&
+        !extractStandardBankMoneyPair(prev)
+      ) {
+        description = prev;
+      }
     }
 
-    for (let j = i + 1; j < lines.length; j++) {
-      const candidate = lines[j];
+    if (i + 1 < lines.length) {
+      const next = lines[i + 1];
 
-      if (isStandardBankMarkerLine(candidate)) continue;
-      if (extractStandardBankMoneyPair(candidate)) break;
-      if (isStandardBankHeaderOrNoise(candidate)) continue;
-
-      reference = candidate;
-      break;
+      if (
+        next &&
+        !isStandardBankMarkerLine(next) &&
+        !isStandardBankHeaderOrNoise(next) &&
+        !extractStandardBankMoneyPair(next) &&
+        isStandardBankReferenceLine(next)
+      ) {
+        reference = next;
+      }
     }
 
     if (shouldSkipStandardBankBlock(description, reference)) {
